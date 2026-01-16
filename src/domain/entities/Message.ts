@@ -1,5 +1,5 @@
 export interface Message {
-  id: string;        // point-virgule
+  id: string;       
   text: string;
   sender: 'user' | 'assistant';
   timestamp: Date;
