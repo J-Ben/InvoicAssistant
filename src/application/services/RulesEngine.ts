@@ -1,7 +1,14 @@
 import { UserContext } from "../../domain/entities/UserContext";
 import { IResponseGenerator } from "../../domain/services/IResponseGenerator";
+import { MistralService } from "../../infrastructure/api/MistralService";
 
 export class RulesEngine implements IResponseGenerator {
+  private mistralService: MistralService;
+
+  constructor() {
+    this.mistralService = new MistralService();
+  }
+
   async generate(message: string, context: UserContext): Promise<string> {
     const msg = message.toLowerCase().trim();
 
@@ -30,8 +37,14 @@ export class RulesEngine implements IResponseGenerator {
       return this.handleHelp();
     }
 
-    // RÈGLE FALLBACK: Pas de match
-    return "Je n'ai pas compris votre demande. Tapez 'aide' pour voir ce que je peux faire.";
+    // RÈGLE FALLBACK: Appel Mistral 🔥
+    console.log("🤖 Fallback vers Mistral API...");
+    try {
+      return await this.mistralService.generate(message, context);
+    } catch (error) {
+      console.error("Erreur Mistral:", error);
+      return "Désolé, je n'ai pas pu traiter votre demande. Pouvez-vous reformuler ?";
+    }
   }
 
   private handleGreeting(context: UserContext): string {
