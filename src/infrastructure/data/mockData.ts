@@ -24,6 +24,13 @@ export const mockUserContext: UserContext = {
       status: "pending",
       createdAt: new Date(Date.now() - 12 * 24 * 60 * 60 * 1000),
     },
+    {
+      id: "fact-004",
+      clientName: "Seniors et solidarité",
+      amount: 2891,
+      status: "sent",
+      createdAt: new Date(Date.now() - 12 * 24 * 60 * 60 * 1000),
+    },
   ],
   recentClients: [
     {

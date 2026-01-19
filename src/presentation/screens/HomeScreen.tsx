@@ -36,32 +36,32 @@ export const HomeScreen: React.FC = () => {
     };
 
     const handleQuickAction = (action: string) => {
-  let message = '';
-  
-  switch (action) {
-    case 'factures':
-      message = 'Mes factures';
-      break;
-    case 'clients':
-      message = 'Mes clients';
-      break;
-    case 'create':
-      message = 'Créer une facture';
-      break;
-  }
-  
-  navigation.navigate('Chat', { 
-    resumeConversation: false,
-    quickAction: message 
-  });
-};
+        let message = '';
+
+        switch (action) {
+            case 'factures':
+                message = 'Mes factures';
+                break;
+            case 'clients':
+                message = 'Mes clients';
+                break;
+            case 'create':
+                message = 'Créer une facture';
+                break;
+        }
+
+        navigation.navigate('Chat', {
+            resumeConversation: false,
+            quickAction: message
+        });
+    };
 
     return (
         <SafeAreaView style={styles.container} edges={['top']}>
             <ScrollView contentContainerStyle={styles.scrollContent}>
                 {/* Header */}
                 <View style={styles.header}>
-                    <Text style={styles.greeting}>👋 Bonjour {userName} !</Text>
+                    <Text style={styles.greeting}>Bonjour {userName} !</Text>
                     <Text style={styles.subtitle}>
                         {new Date().toLocaleDateString('fr-FR', {
                             weekday: 'long',
@@ -73,11 +73,11 @@ export const HomeScreen: React.FC = () => {
 
                 {/* Stats Dashboard */}
                 <View style={styles.statsContainer}>
-                    <Text style={styles.sectionTitle}>📊 Votre activité</Text>
+                    <Text style={styles.sectionTitle}>Votre activité</Text>
 
                     <View style={styles.statsGrid}>
                         <View style={styles.statCard}>
-                            <Text style={styles.statNumber}>{mockUserContext.pendingInvoices.length}</Text>
+                            <Text style={styles.statNumber}>{mockUserContext.pendingInvoices.filter(invoice => invoice.status === 'pending').length}</Text>
                             <Text style={styles.statLabel}>Factures en attente</Text>
                         </View>
 
@@ -85,13 +85,29 @@ export const HomeScreen: React.FC = () => {
                             <Text style={styles.statNumber}>{mockUserContext.recentClients.length}</Text>
                             <Text style={styles.statLabel}>Clients récents</Text>
                         </View>
+
+                    </View>
+                    <View style={styles.statsGrid}>
+                        <View style={styles.statCard}>
+                            <Text style={styles.statNumber}>{mockUserContext.pendingInvoices.filter(invoice => invoice.status === 'pending').length}</Text>
+                            <Text style={styles.statLabel}>Factures en attente</Text>
+                        </View>
+
+                        <View style={styles.statCard}>
+                            <Text style={styles.statNumber}>{mockUserContext.recentClients.length}</Text>
+                            <Text style={styles.statLabel}>Clients récents</Text>
+                        </View>
+                        <View style={styles.statCard}>
+                            <Text style={styles.statNumber}>{mockUserContext.pendingInvoices.filter(invoice => invoice.status === 'sent').length}</Text>
+                            <Text style={styles.statLabel}>Factures envoyées</Text>
+                        </View>
                     </View>
                 </View>
 
                 {/* Conversation Summary */}
                 {hasConversation && lastMessage && (
                     <View style={styles.conversationContainer}>
-                        <Text style={styles.sectionTitle}>💬 Conversation en cours</Text>
+                        <Text style={styles.sectionTitle}>Conversation en cours</Text>
                         <View style={styles.conversationCard}>
                             <Text style={styles.conversationText} numberOfLines={2}>
                                 Dernier message : "{lastMessage.text}"
@@ -112,27 +128,27 @@ export const HomeScreen: React.FC = () => {
 
                 {/* Quick Actions */}
                 <View style={styles.actionsContainer}>
-                    <Text style={styles.sectionTitle}>⚡ Actions rapides</Text>
+                    <Text style={styles.sectionTitle}>Actions rapides</Text>
 
                     <TouchableOpacity
                         style={styles.actionButton}
                         onPress={() => handleQuickAction('factures')}
                     >
-                        <Text style={styles.actionButtonText}>📄 Consulter mes factures</Text>
+                        <Text style={styles.actionButtonText}>Consulter mes factures</Text>
                     </TouchableOpacity>
 
                     <TouchableOpacity
                         style={styles.actionButton}
                         onPress={() => handleQuickAction('clients')}
                     >
-                        <Text style={styles.actionButtonText}>👥 Voir mes clients</Text>
+                        <Text style={styles.actionButtonText}>Voir mes clients</Text>
                     </TouchableOpacity>
 
                     <TouchableOpacity
                         style={styles.actionButton}
                         onPress={() => handleQuickAction('create')}
                     >
-                        <Text style={styles.actionButtonText}>➕ Créer une facture</Text>
+                        <Text style={styles.actionButtonText}>Créer une facture</Text>
                     </TouchableOpacity>
                 </View>
 
@@ -142,7 +158,7 @@ export const HomeScreen: React.FC = () => {
                         style={styles.newChatButton}
                         onPress={handleNewConversation}
                     >
-                        <Text style={styles.newChatButtonText}>💭 Démarrer une conversation</Text>
+                        <Text style={styles.newChatButtonText}>Démarrer une conversation</Text>
                     </TouchableOpacity>
                 )}
             </ScrollView>
@@ -184,6 +200,7 @@ const styles = StyleSheet.create({
     statsGrid: {
         flexDirection: 'row',
         gap: 15,
+        padding: 5
     },
     statCard: {
         flex: 1,
