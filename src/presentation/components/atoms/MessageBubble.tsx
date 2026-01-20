@@ -1,6 +1,7 @@
 import React from 'react';
 import { View, Text, StyleSheet } from 'react-native';
 import { Message } from '../../../domain/entities/Message';
+import { colors } from '../../theme/colors';
 
 interface MessageBubbleProps {
     message: Message;
@@ -28,14 +29,14 @@ const styles = StyleSheet.create({
     },
     userBubble: {
         alignSelf: 'flex-end',
-        backgroundColor: '#99FAEF',
+        backgroundColor: colors.userBubble,
     },
     assistantBubble: {
         alignSelf: 'flex-start',
-        backgroundColor: '#E5E5EA',
+        backgroundColor: colors.assistantBubble,
     },
     text: {
         fontSize: 16,
-        color: '#000',
+        color: colors.text,
     },
 });

@@ -1,7 +1,7 @@
 import { RulesEngine } from '../RulesEngine';
 import { UserContext } from '../../../domain/entities/UserContext';
 
-// Mock MistralService
+// Mock MistralService : je récupère l'existant
 jest.mock('../../../infrastructure/api/MistralService', () => {
   return {
     MistralService: jest.fn().mockImplementation(() => {
