@@ -1,14 +1,14 @@
 import React from 'react';
-import { StyleSheet } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
-import { QueryClientProviderProps as  QueryProvider} from './src/application/providers/QueryProvider';
-import { ChatScreen } from './src/presentation/screens/ChatScreen';
+import { QueryProvider } from './src/application/providers/QueryProvider';
+import { AppNavigator } from './src/presentation/navigation/AppNavigator';
+
 
 export default function App() {
   return (
     <SafeAreaProvider>
       <QueryProvider>
-        <ChatScreen />
+        <AppNavigator />
       </QueryProvider>
     </SafeAreaProvider>
   );
