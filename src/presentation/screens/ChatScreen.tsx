@@ -119,11 +119,11 @@ export const ChatScreen: React.FC = () => {
 const styles = StyleSheet.create({
     safeArea: {
         flex: 1,
-        backgroundColor: '#fff',
+        backgroundColor: '#FDF8F3',
     },
     container: {
         flex: 1,
-        backgroundColor: '#fff',
+        backgroundColor: '#FDF8F3',
     },
     list: {
         padding: 10,

@@ -2,6 +2,7 @@ import React from 'react';
 import { render } from '@testing-library/react-native';
 import { MessageBubble } from '../MessageBubble';
 import { Message } from '../../../../domain/entities/Message';
+import { colors } from '../../../theme/colors';
 
 describe('MessageBubble', () => {
     it('affiche le texte du message', () => {
@@ -17,7 +18,7 @@ describe('MessageBubble', () => {
         expect(getByText('Hello world')).toBeTruthy();
     });
 
-    it('applique le style bleu pour un message utilisateur', () => {
+    it('applique le style pour un message utilisateur', () => {
         const userMessage: Message = {
             id: '1',
             text: 'Test user',
@@ -28,18 +29,16 @@ describe('MessageBubble', () => {
         const { getByTestId } = render(<MessageBubble message={userMessage} />);
         const bubble = getByTestId('message-bubble');
 
-        // Récupère tous les styles (c'est un array)
         const allStyles = bubble.props.style;
 
-        // Vérifie qu'un des styles contient la bonne couleur
         const hasUserColor = allStyles.some((style: any) =>
-            style && style.backgroundColor === '#99FAEF'
+            style && style.backgroundColor === colors.userBubble
         );
 
         expect(hasUserColor).toBe(true);
     });
 
-    it('applique le style gris pour un message assistant', () => {
+    it('applique le style pour un message assistant', () => {
         const assistantMessage: Message = {
             id: '2',
             text: 'Bonjour',
@@ -50,12 +49,10 @@ describe('MessageBubble', () => {
         const { getByTestId } = render(<MessageBubble message={assistantMessage} />);
         const bubble = getByTestId('message-bubble');
 
-        // Récupère tous les styles
         const allStyles = bubble.props.style;
 
-        // Vérifie la couleur assistant
         const hasAssistantColor = allStyles.some((style: any) =>
-            style && style.backgroundColor === '#E5E5EA'
+            style && style.backgroundColor === colors.assistantBubble
         );
 
         expect(hasAssistantColor).toBe(true);

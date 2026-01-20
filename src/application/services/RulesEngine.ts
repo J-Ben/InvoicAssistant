@@ -11,7 +11,7 @@ export class RulesEngine implements IResponseGenerator {
 
   async generate(message: string, context: UserContext): Promise<string> {
     const msg = message.toLowerCase().trim();
-
+    // Ici définnition des règles de l'engine ()
     // RÈGLE 1: Salutation
     if (/bonjour|salut|hello|hey|hi/i.test(msg)) {
       return this.handleGreeting(context);
@@ -37,8 +37,8 @@ export class RulesEngine implements IResponseGenerator {
       return this.handleHelp();
     }
 
-    // RÈGLE FALLBACK: Appel Mistral 🔥
-    console.log("🤖 Fallback vers Mistral API...");
+    // RÈGLE FALLBACK: Appel Mistral (donc aucune règle ne satisfait l'engine)
+    console.log("Fallback vers Mistral API...");
     try {
       return await this.mistralService.generate(message, context);
     } catch (error) {

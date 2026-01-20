@@ -33,7 +33,7 @@ export const SkeletonBubble: React.FC = () => {
 const styles = StyleSheet.create({
     skeleton: {
         alignSelf: 'flex-start',
-        backgroundColor: '#E5E5EA',
+        backgroundColor: '#F0EBE3',
         padding: 12,
         borderRadius: 16,
         marginVertical: 4,
@@ -41,21 +41,21 @@ const styles = StyleSheet.create({
     },
     line1: {
         height: 12,
-        backgroundColor: '#D1D1D6',
+        backgroundColor: '#E8E0D8',
         borderRadius: 6,
         marginBottom: 8,
         width: '90%',
     },
     line2: {
         height: 12,
-        backgroundColor: '#D1D1D6',
+        backgroundColor: '#E8E0D8',
         borderRadius: 6,
         marginBottom: 8,
         width: '70%',
     },
     line3: {
         height: 12,
-        backgroundColor: '#D1D1D6',
+        backgroundColor: '#E8E0D8',
         borderRadius: 6,
         width: '50%',
     },

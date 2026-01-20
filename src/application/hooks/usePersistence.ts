@@ -21,12 +21,12 @@ export const usePersistence = () => {
           if (savedMessages.length > 0) {
             setMessages(savedMessages);
           }
-          // Load user context (ou utiliser mock si pas trouvé)
+          // Load user context 
           try {
             const savedContext = await userContextRepo.getUserContext();
             setUserContext(savedContext);
           } catch {
-            // Si pas de context sauvegardé, utiliser mock
+            // Si pas de context sauvegardé
             setUserContext(mockUserContext);
             await userContextRepo.updateUserContext(mockUserContext);
           }
@@ -36,7 +36,7 @@ export const usePersistence = () => {
       }
     };
     loadData();
-  }, []); // Dépendances vides
+  }, []); 
   // Save messages à chaque changement
   useEffect(() => {
     const saveMessages = async () => {
