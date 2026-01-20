@@ -10,7 +10,10 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({ message }) => {
     const isUser = message.sender === 'user';
 
     return (
-        <View style={[styles.bubble, isUser ? styles.userBubble : styles.assistantBubble]}>
+        <View
+            testID="message-bubble"
+            style={[styles.bubble, isUser ? styles.userBubble : styles.assistantBubble]}
+        >
             <Text style={styles.text}>{message.text}</Text>
         </View>
     );
