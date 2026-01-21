@@ -4,7 +4,9 @@ import {
     FlatList,
     StyleSheet,
     KeyboardAvoidingView,
-    Platform
+    Platform,
+    TouchableOpacity,
+    Text
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { MessageBubble } from '../components/atoms/MessageBubble';
@@ -94,7 +96,14 @@ export const ChatScreen: React.FC = () => {
         }
     }, [route.params?.resumeConversation, route.params?.quickAction]);
     return (
-        <SafeAreaView style={styles.safeArea} edges={['top']}>
+        <SafeAreaView style={styles.safeArea} edges={['top', 'bottom']}>
+            <View style={styles.header}>
+                <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backButton}>
+                    <Text style={styles.backText}>← Retour</Text>
+                </TouchableOpacity>
+                <Text style={styles.headerTitle}>Assistant</Text>
+                <View style={styles.backButton} />
+            </View>
             <KeyboardAvoidingView
                 style={styles.container}
                 behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
@@ -120,6 +129,27 @@ const styles = StyleSheet.create({
     safeArea: {
         flex: 1,
         backgroundColor: '#FDF8F3',
+    },
+    header: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        paddingHorizontal: 16,
+        paddingVertical: 12,
+        borderBottomWidth: 1,
+        borderBottomColor: '#E8E0D8',
+    },
+    backButton: {
+        width: 80,
+    },
+    backText: {
+        fontSize: 16,
+        color: '#C67C4E',
+    },
+    headerTitle: {
+        fontSize: 18,
+        fontWeight: '600',
+        color: '#2D2D2D',
     },
     container: {
         flex: 1,
