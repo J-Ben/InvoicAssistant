@@ -1,8 +1,7 @@
 import { IResponseGenerator } from "../../domain/services/IResponseGenerator";
 import { UserContext } from "../../domain/entities/UserContext";
 
-// A déplacer dans mon .env ultérieurement pour être safe
-const MISTRAL_API_KEY = "AQpHmaAvvMEA6u1PPZFDMNAS4ehNeJYJ";
+const MISTRAL_API_KEY = process.env.EXPO_PUBLIC_MISTRAL_API_KEY;
 
 export class MistralService implements IResponseGenerator {
   private readonly apiUrl: string =
