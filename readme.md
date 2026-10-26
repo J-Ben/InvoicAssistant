@@ -38,6 +38,16 @@ src/
     └── theme/           # Palette de couleurs centralisée
 ```
 
+## Éditeur visuel (rn-canvas)
+
+Les écrans s'éditent visuellement avec `rn-canvas` (package du dépôt, dans `packages/rn-canvas`) :
+
+```bash
+npm run canvas   # puis ouvrir http://localhost:7007
+```
+
+Les variantes d'écran sont déclarées dans les fichiers `*.canvas.tsx` à côté des écrans. Les modifications faites dans l'éditeur sont écrites directement dans le code.
+
 ## Stack
 
 React Native + Expo, TypeScript, Zustand, React Navigation, AsyncStorage, Mistral AI, Jest

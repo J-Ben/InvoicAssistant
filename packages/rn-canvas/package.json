@@ -1,0 +1,51 @@
+{
+  "name": "rn-canvas",
+  "version": "0.1.0",
+  "description": "Éditeur visuel aller-retour pour React Native : vos écrans sur un canevas, vos modifications écrites dans votre code.",
+  "license": "MIT",
+  "type": "module",
+  "bin": {
+    "rn-canvas": "./bin/rn-canvas.js"
+  },
+  "exports": {
+    "./babel": "./babel.cjs",
+    "./runtime": "./src/runtime/index.ts",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "bin",
+    "dist",
+    "babel.cjs",
+    "src/runtime",
+    "src/shared"
+  ],
+  "scripts": {
+    "build": "node build.mjs",
+    "dev:editor": "node build.mjs --watch",
+    "prepare": "node build.mjs",
+    "test": "node --test \"test/**/*.test.ts\"",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "@babel/parser": "^7.28.0"
+  },
+  "devDependencies": {
+    "@babel/core": "^7.29.7",
+    "@babel/plugin-syntax-typescript": "^7.29.7",
+    "@types/node": "^22.20.0",
+    "@types/react": "~19.1.0",
+    "@types/react-dom": "~19.1.0",
+    "esbuild": "^0.25.0",
+    "react": "19.1.0",
+    "react-dom": "19.1.0",
+    "typescript": "~5.9.2"
+  },
+  "peerDependencies": {
+    "react": ">=18",
+    "react-native": ">=0.72",
+    "react-native-web": ">=0.19"
+  },
+  "engines": {
+    "node": ">=22.18"
+  }
+}

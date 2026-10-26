@@ -1,0 +1,233 @@
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import type { CanvasMode, EditorMessage, Payload, EditRequest, InspectResult, LayerNode, ProjectInfo, RuntimeMessage, SelectionInfo } from '../shared/protocol.ts';
+import { api } from './api.ts';
+import { Canvas, DEVICES, type Device } from './Canvas.tsx';
+import { Inspector } from './Inspector.tsx';
+import { Sidebar } from './Sidebar.tsx';
+
+export interface Selection {
+  story: string;
+  info: SelectionInfo;
+  inspect: InspectResult | null;
+  error: string | null;
+}
+
+export function App() {
+  const [project, setProject] = useState<ProjectInfo | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [hidden, setHidden] = useState<Set<string>>(new Set());
+  const [mode, setMode] = useState<CanvasMode>('inspect');
+  const [device, setDevice] = useState<Device>(DEVICES[0]);
+  const [trees, setTrees] = useState<Record<string, LayerNode[]>>({});
+  const [storyErrors, setStoryErrors] = useState<Record<string, string>>({});
+  const [activeStory, setActiveStory] = useState<string | null>(null);
+  const [selection, setSelection] = useState<Selection | null>(null);
+  const [toast, setToast] = useState<{ kind: 'error' | 'ok'; text: string } | null>(null);
+  const frames = useRef(new Map<string, HTMLIFrameElement>());
+  const modeRef = useRef(mode);
+  modeRef.current = mode;
+
+  const loadProject = useCallback(() => {
+    api
+      .project()
+      .then((p) => {
+        setProject(p);
+        setLoadError(null);
+      })
+      .catch((e) => setLoadError(e.message));
+  }, []);
+
+  useEffect(() => {
+    loadProject();
+    const stop = api.events((type) => type === 'stories' && loadProject());
+    window.addEventListener('focus', loadProject);
+    return () => {
+      stop();
+      window.removeEventListener('focus', loadProject);
+    };
+  }, [loadProject]);
+
+  const stories = useMemo(() => project?.stories.flatMap((g) => g.stories) ?? [], [project]);
+  const visible = stories.filter((s) => !hidden.has(s.id));
+
+  const send = useCallback((story: string | null, message: Payload<EditorMessage>) => {
+    const payload = { source: 'rn-canvas-editor', ...message };
+    for (const [id, frame] of frames.current) {
+      if (story === null || id === story) frame.contentWindow?.postMessage(payload, '*');
+    }
+  }, []);
+
+  const showError = (text: string) => setToast({ kind: 'error', text });
+
+  // Chaque analyse porte un numéro : une réponse arrivée après une plus récente (ou après une édition) est ignorée.
+  const inspectSeq = useRef(0);
+  const inspect = useCallback(async (story: string, info: SelectionInfo) => {
+    const seq = ++inspectSeq.current;
+    // Même élément (resélection après Fast Refresh) : on garde l'affichage pendant la mise à jour.
+    setSelection((s) => (s && s.info.loc === info.loc ? { ...s, story, info } : { story, info, inspect: null, error: null }));
+    try {
+      const result = await api.inspect(info.loc, info.name);
+      if (seq === inspectSeq.current) setSelection((s) => (s ? { ...s, inspect: result, error: null } : s));
+    } catch (e) {
+      if (seq === inspectSeq.current) setSelection((s) => (s ? { ...s, error: (e as Error).message } : s));
+    }
+  }, []);
+
+  // Messages des écrans (iframes).
+  useEffect(() => {
+    const onMessage = (event: MessageEvent<RuntimeMessage>) => {
+      const data = event.data;
+      if (data?.source !== 'rn-canvas') return;
+      switch (data.type) {
+        case 'ready':
+          send(data.story, { type: 'mode', mode: modeRef.current });
+          setStoryErrors(({ [data.story]: _, ...rest }) => rest);
+          break;
+        case 'tree':
+          setTrees((t) => ({ ...t, [data.story]: data.tree }));
+          break;
+        case 'select':
+          setActiveStory(data.story);
+          for (const id of frames.current.keys()) if (id !== data.story) send(id, { type: 'select', loc: null });
+          inspect(data.story, data.selection);
+          break;
+        case 'error':
+          setStoryErrors((e) => ({ ...e, [data.story]: data.message }));
+          break;
+      }
+    };
+    window.addEventListener('message', onMessage);
+    return () => window.removeEventListener('message', onMessage);
+  }, [inspect, send]);
+
+  useEffect(() => send(null, { type: 'mode', mode }), [mode, send]);
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.target as HTMLElement)?.closest('input, textarea, select')) return;
+      if (e.key === 'Escape') {
+        setSelection(null);
+        send(null, { type: 'select', loc: null });
+      } else if (e.key === 'v') setMode('inspect');
+      else if (e.key === 'i') setMode('interact');
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [send]);
+
+  const selectLoc = useCallback(
+    (story: string, loc: string) => {
+      setActiveStory(story);
+      for (const id of frames.current.keys()) send(id, { type: 'select', loc: id === story ? loc : null });
+    },
+    [send],
+  );
+
+  const edit = useCallback(
+    async (request: EditRequest) => {
+      const seq = ++inspectSeq.current;
+      try {
+        const result = await api.edit(request);
+        if (request.op === 'setToken') {
+          loadProject();
+        } else if (selection && result.loc) {
+          const loc = result.loc;
+          const fresh = await api.inspect(loc, selection.info.name);
+          if (seq === inspectSeq.current) {
+            setSelection((s) => (s ? { ...s, info: { ...s.info, loc }, inspect: fresh, error: null } : s));
+          }
+          // Le Fast Refresh recharge l'écran ; on resélectionne l'élément une fois le rendu à jour.
+          window.setTimeout(() => send(selection.story, { type: 'select', loc }), 400);
+        }
+        setToast({ kind: 'ok', text: `Écrit dans ${result.file}` });
+      } catch (e) {
+        showError((e as Error).message);
+      }
+    },
+    [selection, send, loadProject],
+  );
+
+  useEffect(() => {
+    if (!toast) return;
+    const t = window.setTimeout(() => setToast(null), toast.kind === 'error' ? 6000 : 1800);
+    return () => window.clearTimeout(t);
+  }, [toast]);
+
+  if (loadError) {
+    return (
+      <div className="empty-state">
+        <h1>rn-canvas</h1>
+        <p>Impossible de joindre le serveur : {loadError}</p>
+      </div>
+    );
+  }
+  if (!project) return <div className="empty-state">Chargement…</div>;
+
+  return (
+    <div className="app">
+      <header className="topbar">
+        <div className="brand">
+          <span className="logo">◆</span> rn-canvas <span className="muted">/ {project.name}</span>
+        </div>
+        <div className="segmented" role="group" aria-label="Mode">
+          <button className={mode === 'inspect' ? 'on' : ''} onClick={() => setMode('inspect')} title="Sélectionner des éléments (V)">
+            Sélection
+          </button>
+          <button className={mode === 'interact' ? 'on' : ''} onClick={() => setMode('interact')} title="Utiliser l'app normalement (I)">
+            Interaction
+          </button>
+        </div>
+        <label className="device">
+          <select value={device.id} onChange={(e) => setDevice(DEVICES.find((d) => d.id === e.target.value)!)}>
+            {DEVICES.map((d) => (
+              <option key={d.id} value={d.id}>
+                {d.label} — {d.width}×{d.height}
+              </option>
+            ))}
+          </select>
+        </label>
+      </header>
+
+      <Sidebar
+        project={project}
+        hidden={hidden}
+        onToggleStory={(id) =>
+          setHidden((h) => {
+            const next = new Set(h);
+            if (next.has(id)) next.delete(id);
+            else next.add(id);
+            return next;
+          })
+        }
+        activeStory={activeStory}
+        onActivateStory={setActiveStory}
+        tree={activeStory ? trees[activeStory] ?? [] : []}
+        selectedLoc={selection?.story === activeStory ? selection.info.loc : null}
+        onSelectLayer={(loc) => activeStory && selectLoc(activeStory, loc)}
+        onHoverLayer={(loc) => activeStory && send(activeStory, { type: 'hover', loc })}
+        onEdit={edit}
+      />
+
+      <Canvas
+        appUrl={project.appUrl}
+        stories={visible}
+        device={device}
+        activeStory={activeStory}
+        errors={storyErrors}
+        frames={frames.current}
+        onActivate={setActiveStory}
+        empty={stories.length === 0}
+      />
+
+      <Inspector
+        selection={selection}
+        theme={project.theme}
+        root={project.root}
+        onSelectAncestor={(loc) => selection && selectLoc(selection.story, loc)}
+        onEdit={edit}
+      />
+
+      {toast && <div className={`toast ${toast.kind}`}>{toast.text}</div>}
+    </div>
+  );
+}

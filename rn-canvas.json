@@ -1,0 +1,7 @@
+{
+  "appUrl": "http://localhost:8081",
+  "theme": {
+    "file": "src/presentation/theme/colors.ts",
+    "export": "colors"
+  }
+}
