@@ -2,6 +2,9 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react
 import type { StoryEntry } from '../shared/protocol.ts';
 import { storyUrl } from './urls.ts';
 
+/** `shown` : l'écran a affiché quelque chose ; `empty` : prêt mais toujours vide après un long délai. */
+export type LoadState = 'shown' | 'empty';
+
 export interface Device {
   id: string;
   label: string;
@@ -19,6 +22,8 @@ export const DEVICES: Device[] = [
 const GAP = 80;
 const PADDING = 60;
 const LABEL = 28;
+/** Les écrans sont rangés en grille plutôt qu'en une seule ligne interminable. */
+const COLUMNS = 4;
 
 interface Props {
   appUrl: string;
@@ -27,20 +32,27 @@ interface Props {
   device: Device;
   activeStory: string | null;
   errors: Record<string, string>;
+  /** Écrans affichés (premier rendu reçu) ; les autres montrent un indicateur de chargement. */
+  loaded: Record<string, LoadState>;
   frames: Map<string, HTMLIFrameElement>;
   onActivate: (id: string) => void;
   empty: boolean;
 }
 
 /** Canevas infini : déplacement (glisser le fond, molette), zoom (Ctrl/⌘ + molette, boutons). */
-export function Canvas({ appUrl, isolateStories, stories, device, activeStory, errors, frames, onActivate, empty }: Props) {
+export function Canvas({ appUrl, isolateStories, stories, device, activeStory, errors, loaded, frames, onActivate, empty }: Props) {
   const viewport = useRef<HTMLDivElement>(null);
   const [view, setView] = useState({ x: PADDING, y: PADDING, zoom: 0.75 });
   const [panning, setPanning] = useState(false);
   const drag = useRef<{ x: number; y: number; vx: number; vy: number } | null>(null);
 
-  const contentWidth = stories.length * (device.width + GAP) - GAP;
-  const contentHeight = device.height + LABEL;
+  const columns = Math.max(1, Math.min(COLUMNS, stories.length));
+  const rows = Math.ceil(stories.length / columns);
+  const cellWidth = device.width + GAP;
+  const cellHeight = device.height + LABEL + GAP;
+  const contentWidth = columns * cellWidth - GAP;
+  const contentHeight = rows * cellHeight - GAP;
+  const pending = stories.filter((s) => !loaded[s.id]).length;
 
   const fit = useCallback(() => {
     const el = viewport.current;
@@ -116,7 +128,7 @@ export const Default = { props: {} };`}</pre>
           <section
             key={story.id}
             className={`artboard ${activeStory === story.id ? 'active' : ''}`}
-            style={{ left: i * (device.width + GAP), width: device.width }}
+            style={{ left: (i % columns) * cellWidth, top: Math.floor(i / columns) * cellHeight, width: device.width }}
           >
             <button className="artboard-label" onClick={() => onActivate(story.id)} title={story.id}>
               {story.file.split('/').pop()!.replace(/\.canvas\.\w+$/, '')} · {story.title}
@@ -132,11 +144,26 @@ export const Default = { props: {} };`}</pre>
                   else frames.delete(story.id);
                 }}
               />
+              {!loaded[story.id] && (
+                <div className="frame-loading" role="status">
+                  <span className="spinner" />
+                  Chargement de l'écran…
+                </div>
+              )}
+              {loaded[story.id] === 'empty' && !errors[story.id] && (
+                <div className="frame-empty">Rien d'affiché : données vides ou redirection ? Ouvrez-le en mode Interaction.</div>
+              )}
               {errors[story.id] && <div className="frame-error">{errors[story.id]}</div>}
             </div>
           </section>
         ))}
       </div>
+      {pending > 0 && (
+        <div className="canvas-progress" role="status">
+          <span className="spinner" />
+          Chargement des écrans · {stories.length - pending}/{stories.length}
+        </div>
+      )}
       <div className="zoom-controls">
         <button onClick={() => zoomAt(1 / 1.2, ...center())} aria-label="Dézoomer">−</button>
         <button onClick={fit} title="Tout afficher">{Math.round(view.zoom * 100)} %</button>

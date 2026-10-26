@@ -1,13 +1,18 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { CanvasMode, EditorMessage, Payload, EditRequest, HistoryState, InspectResult, LayerNode, ProjectInfo, RuntimeMessage, SelectionInfo } from '../shared/protocol.ts';
 import { api } from './api.ts';
-import { Canvas, DEVICES, type Device } from './Canvas.tsx';
+import { Canvas, DEVICES, type Device, type LoadState } from './Canvas.tsx';
 import { Inspector } from './Inspector.tsx';
 import { Sidebar, takeDraggedComponent } from './Sidebar.tsx';
 
 type ThemePref = 'system' | 'light' | 'dark';
 const THEME_KEY = 'rn-canvas:theme';
 const THEME_LABEL: Record<ThemePref, string> = { system: '◐ Système', light: '☀ Clair', dark: '☾ Sombre' };
+/**
+ * Délai après lequel un écran prêt mais toujours vide est considéré comme chargé (rendu null,
+ * redirection…). Long : plusieurs écrans qui ouvrent leur base en parallèle peuvent mettre 30 s.
+ */
+const LOAD_GRACE = 60000;
 const STRUCTURAL = new Set<EditRequest['op']>(['remove', 'duplicate', 'move', 'insert']);
 
 function readThemePref(): ThemePref {
@@ -34,6 +39,8 @@ export function App() {
   const [device, setDevice] = useState<Device>(DEVICES[0]);
   const [trees, setTrees] = useState<Record<string, LayerNode[]>>({});
   const [storyErrors, setStoryErrors] = useState<Record<string, string>>({});
+  const [loaded, setLoaded] = useState<Record<string, LoadState>>({});
+  const markLoaded = useCallback((id: string, state: LoadState) => setLoaded((l) => (l[id] === 'shown' || l[id] === state ? l : { ...l, [id]: state })), []);
   const [activeStory, setActiveStory] = useState<string | null>(null);
   const [selection, setSelection] = useState<Selection | null>(null);
   const [toast, setToast] = useState<{ kind: 'error' | 'ok'; text: string } | null>(null);
@@ -102,9 +109,12 @@ export function App() {
         case 'ready':
           send(data.story, { type: 'mode', mode: modeRef.current });
           setStoryErrors(({ [data.story]: _, ...rest }) => rest);
+          // Un écran qui reste vide (rendu null) ne doit pas garder l'indicateur indéfiniment.
+          window.setTimeout(() => markLoaded(data.story, 'empty'), LOAD_GRACE);
           break;
         case 'tree':
           setTrees((t) => ({ ...t, [data.story]: data.tree }));
+          if (data.tree.length > 0) markLoaded(data.story, 'shown');
           break;
         case 'select':
           setActiveStory(data.story);
@@ -113,6 +123,7 @@ export function App() {
           break;
         case 'error':
           setStoryErrors((e) => ({ ...e, [data.story]: data.message }));
+          markLoaded(data.story, 'shown');
           break;
         case 'snapshot':
           snapshots.current.get(data.requestId)?.(data.storage);
@@ -372,6 +383,7 @@ export function App() {
         device={device}
         activeStory={activeStory}
         errors={storyErrors}
+        loaded={loaded}
         frames={frames.current}
         onActivate={setActiveStory}
         empty={stories.length === 0}
