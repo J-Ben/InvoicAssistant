@@ -3,11 +3,13 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
-import type { EditRequest, EditResult, InspectResult, ProjectInfo, StoryGroup, ThemeInfo, ThemeToken } from '../shared/protocol.ts';
+import type { ComponentEntry, EditRequest, EditResult, InspectResult, ProjectInfo, StoryGroup, ThemeInfo, ThemeToken } from '../shared/protocol.ts';
 import { parseLoc } from '../shared/protocol.ts';
-import { type AstNode, type Patch, type SourceFile, applyPatches, findProperty, parse, programOf, propertyKey, unwrap } from './ast.ts';
+import { type AstNode, type Patch, type SourceFile, applyPatches, findProperty, jsxName, parse, programOf, propertyKey, unwrap, walk } from './ast.ts';
 import { setProp, setStyle, setText, setToken, themeObject } from './edit.ts';
-import { SourceError, findElement, inspectElement, locOfIndex, sourceValue } from './inspect.ts';
+import { SourceError, findElement, inspectElement, locOfIndex, meaningfulChildren, normalizeJsxText, sourceValue } from './inspect.ts';
+import { PRIMITIVES, componentsOf } from './library.ts';
+import { type Insertion, componentJsx, duplicateElement, ensureImport, finalOffset, insertion, moveElement, removeElement } from './structure.ts';
 
 export interface CanvasConfig {
   /** URL de l'app en version web (serveur de dev Expo). */
@@ -20,6 +22,13 @@ export interface CanvasConfig {
   runtimeConfig: string;
   /** Fichier généré qui référence toutes les stories pour le bundler. */
   manifest: string;
+}
+
+export interface ElementOutline {
+  loc: string;
+  name: string;
+  text?: string;
+  children: ElementOutline[];
 }
 
 export const CONFIG_FILE = 'rn-canvas.json';
@@ -57,12 +66,18 @@ export class Project {
       appUrl: this.config.appUrl,
       theme: this.theme(),
       stories: this.stories(),
+      components: this.components(),
     };
   }
 
   // ---- Stories ----
 
   canvasFiles(): string[] {
+    return this.sourceFiles((name) => CANVAS_FILE.test(name));
+  }
+
+  /** Fichiers des dossiers `include` dont le nom satisfait `accept`, triés. */
+  sourceFiles(accept: (name: string) => boolean): string[] {
     const out: string[] = [];
     const visit = (dir: string) => {
       let entries: fs.Dirent[];
@@ -74,7 +89,7 @@ export class Project {
       for (const entry of entries) {
         if (entry.isDirectory()) {
           if (!IGNORED_DIRS.has(entry.name) && !entry.name.startsWith('.')) visit(path.join(dir, entry.name));
-        } else if (CANVAS_FILE.test(entry.name)) {
+        } else if (accept(entry.name)) {
           out.push(this.relative(path.join(dir, entry.name)));
         }
       }
@@ -153,6 +168,48 @@ export default manifest;
     }
   }
 
+  // ---- Bibliothèque de composants ----
+
+  private libraryCache = new Map<string, { mtime: number; entries: ComponentEntry[] }>();
+
+  components(): ComponentEntry[] {
+    const files = this.sourceFiles((name) => /\.(tsx|jsx)$/.test(name) && !CANVAS_FILE.test(name) && !/\.(test|spec)\./.test(name));
+    const entries = files.flatMap((file) => {
+      const abs = this.resolve(file);
+      const mtime = fs.statSync(abs).mtimeMs;
+      const cached = this.libraryCache.get(file);
+      if (cached?.mtime === mtime) return cached.entries;
+      let found: ComponentEntry[] = [];
+      try {
+        found = componentsOf(file, parse(fs.readFileSync(abs, 'utf8'), file));
+      } catch {
+        // Fichier en cours d'écriture ou invalide : il réapparaîtra au prochain appel.
+      }
+      this.libraryCache.set(file, { mtime, entries: found });
+      return found;
+    });
+    return [...PRIMITIVES, ...entries];
+  }
+
+  /** Arbre des éléments JSX d'un fichier (pour les outils qui n'ont pas l'app sous les yeux). */
+  elements(file: string): ElementOutline[] {
+    const src = this.read(file);
+    const roots: ElementOutline[] = [];
+    const visit = (node: AstNode, into: ElementOutline[]) => {
+      walk(node, (child) => {
+        if (child === node || child.type !== 'JSXElement') return;
+        const outline: ElementOutline = { loc: `${file}:${child.loc.start.line}:${child.loc.start.column}`, name: jsxName(child.openingElement.name) ?? '?', children: [] };
+        const text = meaningfulChildren(child);
+        if (text.length === 1 && text[0].type === 'JSXText') outline.text = normalizeJsxText(text[0].value);
+        into.push(outline);
+        visit(child, outline.children);
+        return false;
+      });
+    };
+    visit(src.ast, roots);
+    return roots;
+  }
+
   // ---- Inspection / édition ----
 
   inspect(loc: string, name?: string): InspectResult {
@@ -178,6 +235,8 @@ export default manifest;
     const { element, index } = findElement(src.ast, parsed.line, parsed.column, request.name);
 
     let patches: Patch[];
+    // Pour les opérations qui créent ou déplacent un élément : où le retrouver après écriture.
+    let inserted: Insertion | null = null;
     switch (request.op) {
       case 'setStyle':
         patches = setStyle(src, element, request.key, request.value, request.target);
@@ -188,13 +247,51 @@ export default manifest;
       case 'setProp':
         patches = setProp(src, element, request.prop, request.value);
         break;
+      case 'remove': {
+        this.write(parsed.file, src, removeElement(src, element));
+        return { ok: true, file: parsed.file, loc: null };
+      }
+      case 'duplicate':
+        ({ patches, inserted } = duplicateElement(src, element));
+        break;
+      case 'move': {
+        const target = parseLoc(request.target);
+        if (!target) throw new SourceError(`Emplacement invalide : ${request.target}`);
+        if (target.file !== parsed.file) throw new SourceError('Le déplacement entre fichiers différents n’est pas encore pris en charge.');
+        const { element: targetElement } = findElement(src.ast, target.line, target.column, request.targetName);
+        ({ patches, inserted } = moveElement(src, element, targetElement, request.position));
+        break;
+      }
+      case 'insert': {
+        const entry = this.components().find((c) => c.name === request.component.name && c.file === request.component.file);
+        if (!entry) throw new SourceError(`Composant « ${request.component.name} » introuvable dans la bibliothèque.`);
+        const jsx = componentJsx(entry.name, entry.props);
+        inserted = insertion(src, element, request.position, jsx, '');
+        const from = this.importPath(parsed.file, entry);
+        patches = [inserted, ...(from ? ensureImport(src, entry.name, from) : [])];
+        break;
+      }
       default:
         throw new SourceError('Opération inconnue.');
     }
 
     const next = this.write(parsed.file, src, patches);
-    // Les éditions n'ajoutent ni ne retirent d'éléments : le n-ième élément reste le même.
+    if (inserted) {
+      const start = finalOffset(inserted, patches);
+      const created = jsxElementAt(next.ast, start);
+      return { ok: true, file: parsed.file, loc: created ? `${parsed.file}:${created.loc.start.line}:${created.loc.start.column}` : null };
+    }
+    // Les éditions de valeurs n'ajoutent ni ne retirent d'éléments : le n-ième élément reste le même.
     return { ok: true, file: parsed.file, loc: locOfIndex(next.ast, parsed.file, index) };
+  }
+
+  /** Spécificateur d'import d'un composant depuis `file` (chemin relatif, sans extension). */
+  private importPath(file: string, entry: ComponentEntry): string {
+    if (!entry.file) return 'react-native';
+    if (entry.file === file) return '';
+    let rel = path.posix.relative(path.posix.dirname(file), entry.file).replace(/\.(tsx|jsx|ts|js)$/, '');
+    if (!rel.startsWith('.')) rel = `./${rel}`;
+    return rel;
   }
 
   private read(file: string): SourceFile {
@@ -277,4 +374,13 @@ function flattenTokens(src: SourceFile, object: AstNode, prefix: string, out: Th
 
 function humanize(name: string): string {
   return name.replace(/([a-z0-9])([A-Z])/g, '$1 $2').replace(/_/g, ' ');
+}
+
+function jsxElementAt(ast: AstNode, start: number): AstNode | null {
+  let found: AstNode | null = null;
+  walk(ast, (node) => {
+    if (found) return false;
+    if (node.type === 'JSXElement' && node.start === start) found = node;
+  });
+  return found;
 }

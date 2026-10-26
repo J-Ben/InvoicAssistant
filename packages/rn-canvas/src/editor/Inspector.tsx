@@ -86,7 +86,13 @@ export function Inspector({ selection, theme, root, onSelectAncestor, onEdit }: 
             </span>
           ))}
         </div>
-        <h2 className="element-name">{info.name}</h2>
+        <div className="element-head">
+          <h2 className="element-name">{info.name}</h2>
+          <div className="actions">
+            <button onClick={() => onEdit({ op: 'duplicate', loc: info.loc, name: info.name })} title="Dupliquer (⌘/Ctrl+D)">Dupliquer</button>
+            <button className="danger" onClick={() => onEdit({ op: 'remove', loc: info.loc, name: info.name })} title="Supprimer (Suppr)">Supprimer</button>
+          </div>
+        </div>
         <a className="file-link" href={`vscode://file/${root}/${file}:${line}:${Number(column) + 1}`} title="Ouvrir dans VS Code">
           {file}:{line}
         </a>

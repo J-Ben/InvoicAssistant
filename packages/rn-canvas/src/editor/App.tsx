@@ -5,6 +5,20 @@ import { Canvas, DEVICES, type Device } from './Canvas.tsx';
 import { Inspector } from './Inspector.tsx';
 import { Sidebar } from './Sidebar.tsx';
 
+type ThemePref = 'system' | 'light' | 'dark';
+const THEME_KEY = 'rn-canvas:theme';
+const THEME_LABEL: Record<ThemePref, string> = { system: '◐ Système', light: '☀ Clair', dark: '☾ Sombre' };
+const STRUCTURAL = new Set<EditRequest['op']>(['remove', 'duplicate', 'move', 'insert']);
+
+function readThemePref(): ThemePref {
+  try {
+    const v = localStorage.getItem(THEME_KEY);
+    return v === 'light' || v === 'dark' ? v : 'system';
+  } catch {
+    return 'system';
+  }
+}
+
 export interface Selection {
   story: string;
   info: SelectionInfo;
@@ -23,6 +37,7 @@ export function App() {
   const [activeStory, setActiveStory] = useState<string | null>(null);
   const [selection, setSelection] = useState<Selection | null>(null);
   const [toast, setToast] = useState<{ kind: 'error' | 'ok'; text: string } | null>(null);
+  const [themePref, setThemePref] = useState<ThemePref>(readThemePref);
   const frames = useRef(new Map<string, HTMLIFrameElement>());
   const modeRef = useRef(mode);
   modeRef.current = mode;
@@ -103,6 +118,17 @@ export function App() {
   useEffect(() => send(null, { type: 'mode', mode }), [mode, send]);
 
   useEffect(() => {
+    const root = document.documentElement;
+    if (themePref === 'system') delete root.dataset.theme;
+    else root.dataset.theme = themePref;
+    try {
+      localStorage.setItem(THEME_KEY, themePref);
+    } catch {
+      // Stockage indisponible (navigation privée) : le choix vaut pour la session.
+    }
+  }, [themePref]);
+
+  useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if ((e.target as HTMLElement)?.closest('input, textarea, select')) return;
       if (e.key === 'Escape') {
@@ -116,9 +142,9 @@ export function App() {
   }, [send]);
 
   const selectLoc = useCallback(
-    (story: string, loc: string) => {
+    (story: string, loc: string, name?: string) => {
       setActiveStory(story);
-      for (const id of frames.current.keys()) send(id, { type: 'select', loc: id === story ? loc : null });
+      for (const id of frames.current.keys()) send(id, id === story ? { type: 'select', loc, name } : { type: 'select', loc: null });
     },
     [send],
   );
@@ -130,6 +156,16 @@ export function App() {
         const result = await api.edit(request);
         if (request.op === 'setToken') {
           loadProject();
+        } else if (STRUCTURAL.has(request.op)) {
+          // Nouvel élément (ou supprimé) : l'écran le resélectionne dès que le Fast Refresh l'a rendu.
+          const story = selection?.story ?? activeStory;
+          if (!result.loc) {
+            setSelection(null);
+            send(null, { type: 'select', loc: null });
+          } else if (story) {
+            selectLoc(story, result.loc, request.op === 'insert' ? request.component.name : request.name);
+          }
+          if (request.op === 'insert') loadProject();
         } else if (selection && result.loc) {
           const loc = result.loc;
           const fresh = await api.inspect(loc, selection.info.name);
@@ -137,15 +173,32 @@ export function App() {
             setSelection((s) => (s ? { ...s, info: { ...s.info, loc }, inspect: fresh, error: null } : s));
           }
           // Le Fast Refresh recharge l'écran ; on resélectionne l'élément une fois le rendu à jour.
-          window.setTimeout(() => send(selection.story, { type: 'select', loc }), 400);
+          send(selection.story, { type: 'select', loc, name: selection.info.name });
         }
         setToast({ kind: 'ok', text: `Écrit dans ${result.file}` });
       } catch (e) {
         showError((e as Error).message);
       }
     },
-    [selection, send, loadProject],
+    [selection, activeStory, send, selectLoc, loadProject],
   );
+
+  // Raccourcis : Suppr pour supprimer, ⌘/Ctrl+D pour dupliquer l'élément sélectionné.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (!selection || (e.target as HTMLElement)?.closest('input, textarea, select')) return;
+      const { loc, name } = selection.info;
+      if (e.key === 'Delete' || e.key === 'Backspace') {
+        e.preventDefault();
+        edit({ op: 'remove', loc, name });
+      } else if (e.key === 'd' && (e.metaKey || e.ctrlKey)) {
+        e.preventDefault();
+        edit({ op: 'duplicate', loc, name });
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [selection, edit]);
 
   useEffect(() => {
     if (!toast) return;
@@ -177,6 +230,13 @@ export function App() {
             Interaction
           </button>
         </div>
+        <button
+          className="theme-toggle"
+          onClick={() => setThemePref((t) => (t === 'system' ? 'light' : t === 'light' ? 'dark' : 'system'))}
+          title="Thème de l'éditeur"
+        >
+          {THEME_LABEL[themePref]}
+        </button>
         <label className="device">
           <select value={device.id} onChange={(e) => setDevice(DEVICES.find((d) => d.id === e.target.value)!)}>
             {DEVICES.map((d) => (
@@ -205,6 +265,7 @@ export function App() {
         selectedLoc={selection?.story === activeStory ? selection.info.loc : null}
         onSelectLayer={(loc) => activeStory && selectLoc(activeStory, loc)}
         onHoverLayer={(loc) => activeStory && send(activeStory, { type: 'hover', loc })}
+        selection={selection}
         onEdit={edit}
       />
 

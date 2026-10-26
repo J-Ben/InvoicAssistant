@@ -72,7 +72,8 @@ export type Payload<T> = T extends unknown ? Omit<T, 'source'> : never;
 /** Messages éditeur → runtime. */
 export type EditorMessage =
   | { source: 'rn-canvas-editor'; type: 'mode'; mode: CanvasMode }
-  | { source: 'rn-canvas-editor'; type: 'select'; loc: Loc | null }
+  /** `name` : nom attendu ; tant que l'écran affiche autre chose à cet emplacement (Fast Refresh en cours), la sélection attend. */
+  | { source: 'rn-canvas-editor'; type: 'select'; loc: Loc | null; name?: string }
   | { source: 'rn-canvas-editor'; type: 'hover'; loc: Loc | null };
 
 /** Liste des stories, calculée par le serveur à partir des fichiers `*.canvas.tsx`. */
@@ -135,12 +136,28 @@ export type EditRequest =
   | { op: 'setStyle'; loc: Loc; name: string; key: string; value: EditValue; target: StyleTarget }
   | { op: 'setText'; loc: Loc; name: string; value: string }
   | { op: 'setProp'; loc: Loc; name: string; prop: string; value: EditValue }
-  | { op: 'setToken'; path: string; value: EditValue };
+  | { op: 'setToken'; path: string; value: EditValue }
+  | { op: 'remove'; loc: Loc; name: string }
+  | { op: 'duplicate'; loc: Loc; name: string }
+  | { op: 'move'; loc: Loc; name: string; target: Loc; targetName: string; position: InsertPosition }
+  | { op: 'insert'; loc: Loc; name: string; position: InsertPosition; component: { name: string; file: string | null } };
+
+/** Où placer un élément par rapport à la cible : frère avant/après, ou dernier enfant. */
+export type InsertPosition = 'before' | 'after' | 'inside';
+
+/** Composant insérable depuis la bibliothèque. `file` vaut null pour les primitives React Native. */
+export interface ComponentEntry {
+  name: string;
+  file: string | null;
+  group: string;
+  /** Props obligatoires, remplies avec des valeurs d'exemple à l'insertion. */
+  props: { name: string; type: 'string' | 'number' | 'boolean' | 'function' | 'array' | 'unknown' }[];
+}
 
 export interface EditResult {
   ok: true;
   file: string;
-  /** Nouvel emplacement de l'élément édité (peut bouger si une édition a lieu au-dessus). */
+  /** Emplacement de l'élément édité, déplacé ou créé (null s'il a été supprimé). */
   loc: Loc | null;
 }
 
@@ -161,4 +178,5 @@ export interface ProjectInfo {
   appUrl: string;
   theme: ThemeInfo | null;
   stories: StoryGroup[];
+  components: ComponentEntry[];
 }

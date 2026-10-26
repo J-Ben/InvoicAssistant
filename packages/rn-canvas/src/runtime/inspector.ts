@@ -200,14 +200,19 @@ export function startInspector(storyId: string): InspectorHandle {
     return { loc: ancestors[0].loc, name: ancestors[0].name, ancestors, rect: unionRect(nodes), computed };
   };
 
-  const select = (loc: string | null, fiber?: Fiber) => {
+  // Élément demandé par l'éditeur mais pas encore rendu (création, Fast Refresh en cours).
+  let pending: { loc: string; name?: string } | null = null;
+
+  const select = (loc: string | null, name?: string) => {
     selected = loc;
+    pending = null;
     draw();
     const r = root();
     if (!loc || !r) return;
-    const target = fiber ?? fibersAt(r, loc)[0];
+    const target = fibersAt(r, loc).find((f) => !name || parseTag(tagOf(f)!)?.name === name);
     const info = target ? selectionInfo(target, r) : null;
     if (info) post({ type: 'select', selection: info });
+    else pending = { loc, name };
   };
 
   const sendTree = () => {
@@ -277,7 +282,7 @@ export function startInspector(storyId: string): InspectorHandle {
       hovered = null;
       draw();
     } else if (data.type === 'select') {
-      select(data.loc);
+      select(data.loc, data.name);
     } else if (data.type === 'hover') {
       hovered = data.loc;
       draw();
@@ -291,6 +296,7 @@ export function startInspector(storyId: string): InspectorHandle {
     cancelAnimationFrame(frame);
     frame = requestAnimationFrame(() => {
       sendTree();
+      if (pending) select(pending.loc, pending.name);
       draw();
     });
   };
@@ -301,6 +307,8 @@ export function startInspector(storyId: string): InspectorHandle {
   observer.observe(document.body, { subtree: true, childList: true, attributes: true, characterData: true });
   window.addEventListener('scroll', draw, true);
   window.addEventListener('resize', draw);
+  // Le Fast Refresh peut changer les emplacements (__rnc) sans toucher au DOM : vérification régulière.
+  const poll = window.setInterval(refresh, 1000);
 
   post({ type: 'ready' });
   refresh();
@@ -309,6 +317,7 @@ export function startInspector(storyId: string): InspectorHandle {
     stop() {
       observer.disconnect();
       cancelAnimationFrame(frame);
+      window.clearInterval(poll);
       for (const type of BLOCKED) window.removeEventListener(type, block, true);
       window.removeEventListener('mousemove', onMove, true);
       document.removeEventListener('mouseleave', onLeave);

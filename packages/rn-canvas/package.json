@@ -17,14 +17,17 @@
     "dist",
     "babel.cjs",
     "src/runtime",
-    "src/shared"
+    "src/shared",
+    "README.md",
+    "LICENSE"
   ],
   "scripts": {
     "build": "node build.mjs",
     "dev:editor": "node build.mjs --watch",
     "prepare": "node build.mjs",
     "test": "node --test \"test/**/*.test.ts\"",
-    "typecheck": "tsc --noEmit -p tsconfig.json"
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "prepublishOnly": "npm test && npm run typecheck && npm run build"
   },
   "dependencies": {
     "@babel/parser": "^7.28.0"
@@ -47,5 +50,19 @@
   },
   "engines": {
     "node": ">=22.18"
+  },
+  "keywords": [
+    "react-native",
+    "expo",
+    "visual-editor",
+    "design-tool",
+    "figma",
+    "codemod",
+    "mcp"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/J-Ben/InvoicAssistant.git",
+    "directory": "packages/rn-canvas"
   }
 }

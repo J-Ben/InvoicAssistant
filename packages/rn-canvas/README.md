@@ -82,6 +82,27 @@ Ouvrez **http://localhost:7007**.
 - **Styles** : choisissez la cible. Un style partagé de `StyleSheet.create` touche tous les éléments qui l'utilisent ; « Cet élément uniquement » ajoute une surcharge (`[styles.x, { … }]`).
 - **Jetons** : tapez `colors.primary` pour référencer le thème plutôt qu'une valeur en dur.
 - **Thème** : l'onglet Thème modifie l'objet configuré (`theme` dans `rn-canvas.json`), et donc toute l'app.
+- **Structure** : boutons Dupliquer et Supprimer de l'inspecteur, ou raccourcis ⌘/Ctrl+D et Suppr. Dans l'onglet Calques, un glisser-déposer déplace un élément : en haut du calque cible pour le placer avant, en bas pour après, au milieu pour le mettre dedans.
+- **Composants** : l'onglet liste les composants exportés par le projet et quelques primitives React Native. Un clic insère le composant dans l'élément sélectionné (s'il s'agit d'un conteneur) ou juste après ; on peut aussi le glisser vers les calques. L'import est ajouté, et les props obligatoires (lues dans l'interface `NomProps`) reçoivent des valeurs d'exemple.
+- **Thème de l'éditeur** : le bouton Système / Clair / Sombre de la barre du haut. Le choix est mémorisé dans le navigateur.
+
+## Piloter les écrans depuis une IA (MCP)
+
+`rn-canvas mcp` lance un serveur [MCP](https://modelcontextprotocol.io) qui donne à une IA les mêmes opérations que l'éditeur. Il n'a pas besoin du navigateur : il travaille directement sur le code.
+
+```bash
+claude mcp add rn-canvas -- npx rn-canvas mcp
+```
+
+| Outil | Rôle |
+|---|---|
+| `list_screens`, `list_components`, `get_theme` | Découvrir le projet |
+| `list_elements` | Arbre JSX d'un fichier, avec les emplacements `fichier:ligne:colonne` |
+| `inspect_element` | Texte, props et styles d'un élément, avec leur origine |
+| `set_style`, `set_text`, `set_prop`, `set_token` | Modifier des valeurs (`"colors.primary"` est accepté comme jeton) |
+| `move_element`, `duplicate_element`, `delete_element`, `insert_component` | Modifier la structure |
+
+Si l'éditeur est ouvert en même temps, il affiche les modifications de l'IA en direct grâce au Fast Refresh.
 
 ## Configuration (`rn-canvas.json`)
 
@@ -107,8 +128,17 @@ Le serveur n'écoute que sur `127.0.0.1` et refuse les requêtes d'autres origin
 ## Limites actuelles
 
 - Les valeurs dynamiques (`{user.name}`, styles calculés) s'affichent en lecture seule.
-- Il n'est pas encore possible d'ajouter, de supprimer ou de déplacer des éléments.
+- Les modifications de structure ne concernent que les enfants directs d'un élément JSX. Un élément affiché sous condition (`{cond && <X />}`), dans une liste (`.map`) ou à la racine d'un composant se modifie dans le code.
+- Les déplacements se font dans un même fichier. Pour sortir un élément d'un composant, il faut passer par le code.
 - Seuls les modules qui fonctionnent sur le web peuvent s'afficher ; les autres doivent être simulés dans `setup` ou dans le wrapper.
+
+## Publication
+
+Le nom `rn-canvas` est déjà pris sur npm : il faut en choisir un autre avant de publier (par exemple avec un scope : `@votre-compte/rn-canvas`). Pour le changer, modifiez le champ `name` de `package.json` et les imports `rn-canvas/babel` et `rn-canvas/runtime` dans le projet hôte, puis :
+
+```bash
+npm publish --access public   # lance d'abord les tests, la vérification des types et le build
+```
 
 ## Développement du package
 

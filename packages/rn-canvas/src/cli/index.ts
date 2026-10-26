@@ -4,12 +4,14 @@
  *   rn-canvas init       branche le projet courant (config, Babel, point d'entrée, manifeste)
  *   rn-canvas dev        lance l'éditeur (+ le serveur Expo si besoin)
  *   rn-canvas generate   régénère le manifeste des stories
+ *   rn-canvas mcp        serveur MCP (stdio) pour piloter les écrans depuis une IA
  */
 import { spawn, type ChildProcess } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { startServer } from '../server/http.ts';
+import { serveMcp } from '../server/mcp.ts';
 import { CONFIG_FILE, Project } from '../server/project.ts';
 
 const EDITOR_DIR = fileURLToPath(new URL('./editor', import.meta.url));
@@ -18,7 +20,7 @@ const ENTRY_IMPORT = "import { withCanvas } from 'rn-canvas/runtime';";
 const [command = 'help', ...args] = process.argv.slice(2);
 const root = process.cwd();
 
-const commands: Record<string, () => Promise<void> | void> = { init, dev, generate, help };
+const commands: Record<string, () => Promise<void> | void> = { init, dev, generate, mcp, help };
 await (commands[command] ?? help)();
 
 function flag(name: string): string | true | undefined {
@@ -38,7 +40,13 @@ function help() {
   rn-canvas init                 Branche le projet courant
   rn-canvas dev [--port 7007]    Lance l'éditeur ; démarre Expo si l'app ne répond pas
               [--no-app]         … sans démarrer Expo
-  rn-canvas generate             Régénère le manifeste des stories`);
+  rn-canvas generate             Régénère le manifeste des stories
+  rn-canvas mcp                  Serveur MCP (stdio) : claude mcp add rn-canvas -- npx rn-canvas mcp`);
+}
+
+function mcp() {
+  const pkg = JSON.parse(fs.readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
+  serveMcp(new Project(root), pkg.version);
 }
 
 function generate() {
