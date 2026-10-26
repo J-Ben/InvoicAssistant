@@ -225,6 +225,18 @@ export function App() {
             if (component) editRef.current({ op: 'insert', loc: data.target.loc, name: data.target.name, position: data.position, component });
           }
           break;
+        case 'wheel': {
+          // Rejoue la molette sur le canevas, au point équivalent de l'éditeur.
+          const frame = frames.current.get(data.story);
+          const canvas = document.querySelector('main.canvas');
+          if (!frame || !canvas) break;
+          const rect = frame.getBoundingClientRect();
+          const scale = rect.width / (frame.offsetWidth || 1);
+          canvas.dispatchEvent(
+            new WheelEvent('wheel', { deltaX: data.deltaX, deltaY: data.deltaY, clientX: rect.left + data.x * scale, clientY: rect.top + data.y * scale, metaKey: data.metaKey, ctrlKey: data.ctrlKey, cancelable: true }),
+          );
+          break;
+        }
         case 'key':
           // Rejoue le raccourci dans l'éditeur, comme s'il avait été tapé ici.
           window.dispatchEvent(new KeyboardEvent('keydown', { key: data.key, metaKey: data.metaKey, ctrlKey: data.ctrlKey, shiftKey: data.shiftKey, altKey: data.altKey }));

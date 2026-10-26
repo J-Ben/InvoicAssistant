@@ -69,6 +69,8 @@ export type RuntimeMessage =
   | { source: 'rn-canvas'; type: 'drop'; story: string; kind: 'move' | 'component'; from: { loc: Loc; name: string } | null; target: { loc: Loc; name: string }; position: InsertPosition }
   | { source: 'rn-canvas'; type: 'snapshot'; story: string; requestId: number; storage: Record<string, string> }
   | { source: 'rn-canvas'; type: 'measured'; story: string; requestId: number; rects: Record<Loc, Rect>; viewport: { width: number; height: number } }
+  /** ⌘/Ctrl + molette au-dessus de l'écran (zoom du canevas) ; x, y dans l'écran. */
+  | { source: 'rn-canvas'; type: 'wheel'; story: string; deltaX: number; deltaY: number; x: number; y: number; metaKey: boolean; ctrlKey: boolean }
   /** Raccourci clavier tapé pendant que le focus est dans l'écran (relayé à l'éditeur). */
   | { source: 'rn-canvas'; type: 'key'; story: string; key: string; metaKey: boolean; ctrlKey: boolean; shiftKey: boolean; altKey: boolean };
 

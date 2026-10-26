@@ -128,12 +128,32 @@ export function Canvas({ appUrl, isolateStories, stories, allStories, device, ac
     const onWheel = (e: WheelEvent) => {
       e.preventDefault();
       const rect = el.getBoundingClientRect();
-      if (e.ctrlKey || e.metaKey) zoomAt(Math.exp(-e.deltaY * 0.01), e.clientX - rect.left, e.clientY - rect.top);
+      // Un cran de molette (≈ 100) ne doit pas tripler le zoom : pas limité à ±25 %.
+      if (e.ctrlKey || e.metaKey) zoomAt(Math.exp(-Math.max(-25, Math.min(25, e.deltaY)) * 0.01), e.clientX - rect.left, e.clientY - rect.top);
       else setView((v) => ({ ...v, x: v.x - e.deltaX, y: v.y - e.deltaY }));
     };
     el.addEventListener('wheel', onWheel, { passive: false });
     return () => el.removeEventListener('wheel', onWheel);
   }, [zoomAt]);
+
+  // Raccourcis : ⌘/Ctrl + / - pour zoomer, ⌘/Ctrl 0 ou Maj 1 pour tout afficher, Maj 0 pour 100 %.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.target as HTMLElement)?.closest?.('input, textarea, select')) return;
+      const el = viewport.current;
+      if (!el) return;
+      const { width, height } = el.getBoundingClientRect();
+      const combo = e.metaKey || e.ctrlKey;
+      if (combo && (e.key === '=' || e.key === '+')) zoomAt(1.2, width / 2, height / 2);
+      else if (combo && e.key === '-') zoomAt(1 / 1.2, width / 2, height / 2);
+      else if ((combo && e.key === '0') || (e.shiftKey && !combo && (e.key === '!' || e.code === 'Digit1'))) fit();
+      else if (e.shiftKey && !combo && e.code === 'Digit0') zoomAt(1 / view.zoom, width / 2, height / 2);
+      else return;
+      e.preventDefault();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [zoomAt, fit, view.zoom]);
 
   const onPointerDown = (e: React.PointerEvent) => {
     if (e.target !== e.currentTarget && !(e.target as HTMLElement).classList.contains('world')) return;

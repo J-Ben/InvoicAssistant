@@ -495,6 +495,12 @@ export function startInspector(storyId: string): InspectorHandle {
 
   // Les raccourcis de l'éditeur doivent marcher même quand le focus est dans l'écran.
   const onKey = (event: KeyboardEvent) => {
+    // Zoom du canevas (⌘/Ctrl + / - / 0) : dans tous les modes, et jamais le zoom du navigateur.
+    if ((event.metaKey || event.ctrlKey) && ['=', '+', '-', '0'].includes(event.key)) {
+      event.preventDefault();
+      post({ type: 'key', key: event.key, metaKey: event.metaKey, ctrlKey: event.ctrlKey, shiftKey: event.shiftKey, altKey: event.altKey });
+      return;
+    }
     if (mode !== 'inspect') return;
     const target = event.target as HTMLElement | null;
     if (target?.closest?.('input, textarea, [contenteditable="true"]')) return;
@@ -505,6 +511,14 @@ export function startInspector(storyId: string): InspectorHandle {
     post({ type: 'key', key: event.key, metaKey: event.metaKey, ctrlKey: event.ctrlKey, shiftKey: event.shiftKey, altKey: event.altKey });
   };
   window.addEventListener('keydown', onKey, true);
+
+  // ⌘/Ctrl + molette (et pincement du trackpad) zoome le canevas, même au-dessus d'un écran.
+  const onWheel = (event: WheelEvent) => {
+    if (!event.metaKey && !event.ctrlKey) return;
+    event.preventDefault();
+    post({ type: 'wheel', deltaX: event.deltaX, deltaY: event.deltaY, x: event.clientX, y: event.clientY, metaKey: event.metaKey, ctrlKey: event.ctrlKey });
+  };
+  window.addEventListener('wheel', onWheel, { capture: true, passive: false });
 
   const onMessage = (event: MessageEvent<EditorMessage>) => {
     const data = event.data;
@@ -572,6 +586,7 @@ export function startInspector(storyId: string): InspectorHandle {
       document.removeEventListener('mouseleave', onLeave);
       window.removeEventListener('message', onMessage);
       window.removeEventListener('keydown', onKey, true);
+      window.removeEventListener('wheel', onWheel, true);
       window.removeEventListener('scroll', draw, true);
       window.removeEventListener('resize', draw);
       overlay.remove();
