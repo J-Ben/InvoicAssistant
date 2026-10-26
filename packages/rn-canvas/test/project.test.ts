@@ -205,6 +205,16 @@ test('stories : découverte et manifeste', () => {
   const manifest = fs.readFileSync(path.join(root, 'rn-canvas.stories.ts'), 'utf8');
   assert.ok(manifest.includes(`"src/screens/Card.canvas.tsx": () => require("./src/screens/Card.canvas.tsx")`));
   assert.ok(manifest.includes('config: undefined'));
+  assert.ok(!manifest.includes('expo-router'));
+});
+
+test('manifeste : routeur expo-router référencé quand le projet en dépend', () => {
+  const { project, root } = fixture();
+  const pkgFile = path.join(root, 'package.json');
+  const pkg = fs.existsSync(pkgFile) ? JSON.parse(fs.readFileSync(pkgFile, 'utf8')) : {};
+  fs.writeFileSync(pkgFile, JSON.stringify({ ...pkg, dependencies: { ...pkg.dependencies, 'expo-router': '~58.0.0' } }));
+  project.writeManifest();
+  assert.ok(fs.readFileSync(path.join(root, 'rn-canvas.stories.ts'), 'utf8').includes(`router: require('expo-router').router,`));
 });
 
 test('surcharge dans un tableau de styles multi-ligne : une ligne à part, virgule finale respectée', () => {

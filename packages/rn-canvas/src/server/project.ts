@@ -151,6 +151,8 @@ export class Project {
     const runtimeConfig = fs.existsSync(path.resolve(this.root, this.config.runtimeConfig))
       ? `require(${JSON.stringify(importPath(this.config.runtimeConfig))}).default`
       : 'undefined';
+    const pkg = readJson(path.join(this.root, 'package.json')) as { dependencies?: Record<string, string> } | null;
+    const router = pkg?.dependencies?.['expo-router'] ? `\n  router: require('expo-router').router,` : '';
     const entries = this.canvasFiles()
       .map((file) => `    ${JSON.stringify(file)}: () => require(${JSON.stringify(importPath(file))}),`)
       .join('\n');
@@ -160,7 +162,7 @@ export class Project {
 import type { CanvasManifest } from 'rn-canvas/runtime';
 
 const manifest: CanvasManifest = {
-  config: ${runtimeConfig},
+  config: ${runtimeConfig},${router}
   files: {
 ${entries}
   },

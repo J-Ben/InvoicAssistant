@@ -51,7 +51,9 @@ export function CanvasHost({ storyId, loadManifest }: { storyId: string; loadMan
   // Résolution + setup synchrones : les stores sont remplis avant le premier rendu de l'écran.
   const [state] = useState(() => {
     try {
-      const story = resolveStory(storyId, loadManifest());
+      const manifest = loadManifest();
+      if (manifest.router) neutralizeRouter(manifest.router, storyId);
+      const story = resolveStory(storyId, manifest);
       if (story.storage) restoreStorage(story.storage);
       const cleanups = story.setups.map((setup) => setup());
       return { story, cleanups, error: null as Error | null };
@@ -77,6 +79,27 @@ export function CanvasHost({ storyId, loadManifest }: { storyId: string; loadMan
     element = h(Wrapper, { story: { id: storyId, parameters: story.parameters }, children: element });
   }
   return h(ErrorBoundary, { storyId }, h(View, { style: styles.root }, element));
+}
+
+const NAVIGATION_METHODS = ['navigate', 'push', 'replace', 'back', 'goBack', 'dismiss', 'dismissAll', 'dismissTo', 'linkTo', 'reload'];
+
+/**
+ * Un écran affiché seul ne doit pas naviguer : une redirection (`router.replace` dans un effet)
+ * changerait l'URL de l'iframe et la ferait recharger en boucle. La demande est signalée à l'éditeur.
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function neutralizeRouter(router: Record<string, any>, storyId: string) {
+  // expo-router rebranche ses méthodes (Object.assign) après le premier rendu : des accesseurs
+  // dont l'écriture est ignorée gardent la version neutre.
+  const pin = (key: string, value: unknown) => Object.defineProperty(router, key, { get: () => value, set: () => {}, configurable: true, enumerable: true });
+  for (const action of NAVIGATION_METHODS) {
+    pin(action, (target?: unknown) => {
+      const href = typeof target === 'string' ? target : target && typeof target === 'object' && 'pathname' in target ? String((target as { pathname: unknown }).pathname) : null;
+      window.parent?.postMessage({ source: 'rn-canvas', type: 'navigate', story: storyId, action, href }, '*');
+    });
+  }
+  pin('canGoBack', () => false);
+  pin('canDismiss', () => false);
 }
 
 /** Remplace le stockage de l'écran par celui de la variante (chaque écran a sa propre origine). */

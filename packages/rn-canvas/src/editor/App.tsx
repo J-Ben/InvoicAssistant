@@ -16,7 +16,16 @@ const THEME_LABEL: Record<ThemePref, string> = { system: '◐ Système', light: 
 const LOAD_GRACE = 60000;
 /** Base de l'écran encore tenue par une page qui se ferme (rechargement, autre onglet) : on réessaie. */
 const STORAGE_BUSY = /createSyncAccessHandle|Access Handles? cannot be created|NoModificationAllowedError/i;
-const BUSY_RETRIES = 5;
+const BUSY_RETRIES = 3;
+const GENERATIONS_KEY = 'rn-canvas:generations';
+
+function readGenerations(): Record<string, number> {
+  try {
+    return JSON.parse(localStorage.getItem(GENERATIONS_KEY) ?? '{}');
+  } catch {
+    return {};
+  }
+}
 const STRUCTURAL = new Set<EditRequest['op']>(['remove', 'duplicate', 'move', 'insert']);
 
 function readThemePref(): ThemePref {
@@ -52,6 +61,24 @@ export function App() {
   const [history, setHistory] = useState<HistoryState>({ undo: null, redo: null });
   const frames = useRef(new Map<string, HTMLIFrameElement>());
   const busyRetries = useRef(new Map<string, number>());
+  const graceTimers = useRef(new Map<string, number>());
+  // Nouvel essai d'un écran (rechargement, stockage neuf) : il repasse « en chargement ».
+  const resetLoad = useCallback((id: string) => {
+    window.clearTimeout(graceTimers.current.get(id));
+    graceTimers.current.delete(id);
+    setLoaded(({ [id]: _, ...rest }) => rest);
+  }, []);
+  // Écrans passés sur un stockage neuf ; mémorisé pour retrouver leurs données à la session suivante.
+  const [generations, setGenerations] = useState<Record<string, number>>(readGenerations);
+  const nextGeneration = useCallback((id: string) => {
+    setGenerations((g) => {
+      const next = { ...g, [id]: (g[id] ?? 0) + 1 };
+      try {
+        localStorage.setItem(GENERATIONS_KEY, JSON.stringify(next));
+      } catch {}
+      return next;
+    });
+  }, []);
   const tab = useEditorTab();
   // Écrans (re)montés quand cet onglet prend la main : on repart d'un état de chargement propre.
   useEffect(() => {
@@ -123,7 +150,8 @@ export function App() {
           send(data.story, { type: 'mode', mode: modeRef.current });
           setStoryErrors(({ [data.story]: _, ...rest }) => rest);
           // Un écran qui reste vide (rendu null) ne doit pas garder l'indicateur indéfiniment.
-          window.setTimeout(() => markLoaded(data.story, 'empty'), LOAD_GRACE);
+          window.clearTimeout(graceTimers.current.get(data.story));
+          graceTimers.current.set(data.story, window.setTimeout(() => markLoaded(data.story, 'empty'), LOAD_GRACE));
           break;
         case 'tree':
           setTrees((t) => ({ ...t, [data.story]: data.tree }));
@@ -139,18 +167,29 @@ export function App() {
           break;
         case 'error': {
           const attempt = (busyRetries.current.get(data.story) ?? 0) + 1;
-          if (STORAGE_BUSY.test(data.message) && attempt <= BUSY_RETRIES) {
+          if (STORAGE_BUSY.test(data.message)) {
             busyRetries.current.set(data.story, attempt);
-            window.setTimeout(() => {
-              const frame = frames.current.get(data.story);
-              if (frame) frame.src = frame.src;
-            }, 1000 * attempt);
-            break;
+            resetLoad(data.story);
+            if (attempt <= BUSY_RETRIES) {
+              window.setTimeout(() => {
+                const frame = frames.current.get(data.story);
+                if (frame) frame.src = frame.src;
+              }, 1000 * attempt);
+              break;
+            }
+            // Toujours tenue (ancien onglet, verrou resté bloqué dans le navigateur) : base neuve.
+            if (attempt === BUSY_RETRIES + 1) {
+              nextGeneration(data.story);
+              break;
+            }
           }
           setStoryErrors((e) => ({ ...e, [data.story]: data.message }));
           markLoaded(data.story, 'shown');
           break;
         }
+        case 'navigate':
+          setToast({ kind: 'ok', text: `Navigation ignorée dans le canevas : ${data.action}(${data.href ?? ''})` });
+          break;
         case 'snapshot':
           snapshots.current.get(data.requestId)?.(data.storage);
           snapshots.current.delete(data.requestId);
@@ -427,6 +466,7 @@ export function App() {
           activeStory={activeStory}
           errors={storyErrors}
           loaded={loaded}
+          generations={generations}
           frames={frames.current}
           onActivate={setActiveStory}
           empty={stories.length === 0}

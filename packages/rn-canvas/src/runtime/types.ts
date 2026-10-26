@@ -48,6 +48,12 @@ export interface CanvasRuntimeConfig {
 /** Fichier généré par `rn-canvas generate`. */
 export interface CanvasManifest {
   config?: CanvasRuntimeConfig;
+  /**
+   * Routeur impératif d'expo-router (`router`), ajouté quand le projet l'utilise : neutralisé dans
+   * le canevas pour qu'une redirection ou un `router.push` ne fasse pas sortir l'iframe de l'écran.
+   */
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  router?: Record<string, any>;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   files: Record<string, () => any>;
 }

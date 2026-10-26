@@ -18,3 +18,11 @@ test("non isolé, ou hôte autre que localhost : l'URL de l'app telle quelle", (
   assert.equal(new URL(storyUrl('http://localhost:8081', story, false)).hostname, 'localhost');
   assert.equal(new URL(storyUrl('http://192.168.1.10:8081', story, true)).hostname, '192.168.1.10');
 });
+
+test('génération : un autre sous-domaine (stockage neuf) pour le même écran', () => {
+  const base = new URL(storyUrl('http://localhost:8081', story, true)).hostname;
+  const next = new URL(storyUrl('http://localhost:8081', story, true, 1)).hostname;
+  assert.match(next, /^accueil-actuel-[a-z0-9]+-g1\.localhost$/);
+  assert.notEqual(next, base);
+  assert.equal(storyUrl('http://localhost:8081', story, true, 0), storyUrl('http://localhost:8081', story, true));
+});

@@ -63,6 +63,8 @@ export type RuntimeMessage =
   | { source: 'rn-canvas'; type: 'tree'; story: string; tree: LayerNode[] }
   | { source: 'rn-canvas'; type: 'select'; story: string; selection: SelectionInfo }
   | { source: 'rn-canvas'; type: 'error'; story: string; message: string }
+  /** Navigation demandée par l'écran (ignorée : l'écran reste affiché seul). */
+  | { source: 'rn-canvas'; type: 'navigate'; story: string; action: string; href: string | null }
   /** Glisser-déposer sur l'écran : déplacer un élément, ou déposer le composant glissé depuis l'éditeur. */
   | { source: 'rn-canvas'; type: 'drop'; story: string; kind: 'move' | 'component'; from: { loc: Loc; name: string } | null; target: { loc: Loc; name: string }; position: InsertPosition }
   | { source: 'rn-canvas'; type: 'snapshot'; story: string; requestId: number; storage: Record<string, string> }

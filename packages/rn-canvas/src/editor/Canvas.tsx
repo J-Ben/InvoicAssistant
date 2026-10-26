@@ -34,13 +34,15 @@ interface Props {
   errors: Record<string, string>;
   /** Écrans affichés (premier rendu reçu) ; les autres montrent un indicateur de chargement. */
   loaded: Record<string, LoadState>;
+  /** Stockage de rechange par écran (voir `storyUrl`). */
+  generations: Record<string, number>;
   frames: Map<string, HTMLIFrameElement>;
   onActivate: (id: string) => void;
   empty: boolean;
 }
 
 /** Canevas infini : déplacement (glisser le fond, molette), zoom (Ctrl/⌘ + molette, boutons). */
-export function Canvas({ appUrl, isolateStories, stories, device, activeStory, errors, loaded, frames, onActivate, empty }: Props) {
+export function Canvas({ appUrl, isolateStories, stories, device, activeStory, errors, loaded, generations, frames, onActivate, empty }: Props) {
   const viewport = useRef<HTMLDivElement>(null);
   const [view, setView] = useState({ x: PADDING, y: PADDING, zoom: 0.75 });
   const [panning, setPanning] = useState(false);
@@ -136,7 +138,7 @@ export const Default = { props: {} };`}</pre>
             <div className="frame" style={{ width: device.width, height: device.height }}>
               <iframe
                 title={story.id}
-                src={storyUrl(appUrl, story, isolateStories)}
+                src={storyUrl(appUrl, story, isolateStories, generations[story.id])}
                 width={device.width}
                 height={device.height}
                 ref={(el) => {
