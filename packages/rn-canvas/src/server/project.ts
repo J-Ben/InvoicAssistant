@@ -3,9 +3,9 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
-import type { ComponentEntry, EditRequest, EditResult, InspectResult, ProjectInfo, StoryGroup, ThemeInfo, ThemeToken } from '../shared/protocol.ts';
+import type { ComponentEntry, EditRequest, EditResult, HistoryState, InspectResult, ProjectInfo, StoryGroup, ThemeInfo, ThemeToken } from '../shared/protocol.ts';
 import { parseLoc } from '../shared/protocol.ts';
-import { type AstNode, type Patch, type SourceFile, applyPatches, findProperty, jsxName, parse, programOf, propertyKey, unwrap, walk } from './ast.ts';
+import { type AstNode, type Patch, type SourceFile, applyPatches, findProperty, jsxName, moduleDeclarators, parse, programOf, propertyKey, unwrap, walk } from './ast.ts';
 import { setProp, setStyle, setText, setToken, themeObject } from './edit.ts';
 import { SourceError, findElement, inspectElement, locOfIndex, meaningfulChildren, normalizeJsxText, sourceValue } from './inspect.ts';
 import { PRIMITIVES, componentsOf } from './library.ts';
@@ -23,7 +23,11 @@ export interface CanvasConfig {
   /** Dossiers où chercher les fichiers `*.canvas.tsx`. */
   include: string[];
   /** Objet de thème exporté dont les valeurs deviennent des jetons. */
-  theme?: { file: string; export: string };
+  /**
+   * Objet de thème exporté dont les valeurs deviennent des jetons. `alias` : nom sous lequel les
+   * composants y accèdent, s'il diffère de l'export (ex. `colors`, renvoyé par useTheme()).
+   */
+  theme?: { file: string; export: string; alias?: string };
   /** Fichier de configuration runtime optionnel (wrapper, appareils). */
   runtimeConfig: string;
   /** Fichier généré qui référence toutes les stories pour le bundler. */
@@ -36,6 +40,18 @@ export interface ElementOutline {
   text?: string;
   children: ElementOutline[];
 }
+
+interface HistoryEntry {
+  label: string;
+  file: string;
+  before: string;
+  after: string;
+  /** Élément à resélectionner après annulation / rétablissement. */
+  locBefore: string | null;
+  locAfter: string | null;
+}
+
+const HISTORY_LIMIT = 100;
 
 export const CONFIG_FILE = 'rn-canvas.json';
 const CANVAS_FILE = /\.canvas\.(tsx|ts|jsx|js)$/;
@@ -169,7 +185,7 @@ export default manifest;
       if (!object) return null;
       const tokens: ThemeToken[] = [];
       flattenTokens(src, object, theme.export, tokens);
-      return { file: theme.file, exportName: theme.export, tokens };
+      return { file: theme.file, exportName: theme.export, alias: theme.alias ?? null, tokens };
     } catch {
       return null;
     }
@@ -227,7 +243,58 @@ export default manifest;
     return inspectElement(src, parsed.file, element);
   }
 
+  private undoStack: HistoryEntry[] = [];
+  private redoStack: HistoryEntry[] = [];
+  /** Modification en cours d'enregistrement dans l'historique (une par appel à edit). */
+  private recording: HistoryEntry | null = null;
+
+  history(): HistoryState {
+    return { undo: this.undoStack.at(-1)?.label ?? null, redo: this.redoStack.at(-1)?.label ?? null };
+  }
+
+  undo(): EditResult {
+    return this.replay(this.undoStack, this.redoStack, 'before');
+  }
+
+  redo(): EditResult {
+    return this.replay(this.redoStack, this.undoStack, 'after');
+  }
+
+  private replay(from: HistoryEntry[], to: HistoryEntry[], restore: 'before' | 'after'): EditResult {
+    const entry = from.at(-1);
+    if (!entry) throw new SourceError(restore === 'before' ? 'Rien à annuler.' : 'Rien à rétablir.', 409);
+    const abs = this.resolve(entry.file);
+    const expected = restore === 'before' ? entry.after : entry.before;
+    if (fs.readFileSync(abs, 'utf8') !== expected) {
+      // Le fichier a été modifié ailleurs (éditeur de code…) : on n'écrase jamais ce travail.
+      from.length = 0;
+      throw new SourceError(`${entry.file} a été modifié en dehors de l'éditeur depuis : impossible de ${restore === 'before' ? 'l’annuler' : 'le rétablir'} sans écraser ce changement.`, 409);
+    }
+    fs.writeFileSync(abs, entry[restore]);
+    from.pop();
+    to.push(entry);
+    return { ok: true, file: entry.file, loc: restore === 'before' ? entry.locBefore : entry.locAfter, history: this.history() };
+  }
+
   edit(request: EditRequest): EditResult {
+    this.recording = { label: describe(request), file: '', before: '', after: '', locBefore: 'loc' in request ? request.loc : null, locAfter: null };
+    try {
+      const result = this.applyEdit(request);
+      const entry = this.recording;
+      if (entry.file) {
+        entry.locAfter = result.loc;
+        this.undoStack.push(entry);
+        if (this.undoStack.length > HISTORY_LIMIT) this.undoStack.shift();
+        this.redoStack = [];
+      }
+      return { ...result, history: this.history() };
+    } finally {
+      this.recording = null;
+    }
+  }
+
+  private applyEdit(request: EditRequest): Omit<EditResult, 'history'> {
+    if (request.op === 'addStory') return this.addStory(request.file, request.base, request.exportName, request.storage);
     if (request.op === 'setToken') {
       const theme = this.config.theme;
       if (!theme) throw new SourceError('Aucun thème configuré dans rn-canvas.json.');
@@ -292,6 +359,32 @@ export default manifest;
     return { ok: true, file: parsed.file, loc: locOfIndex(next.ast, parsed.file, index) };
   }
 
+  /** Ajoute `export const <exportName> = { ...<base>, storage: {…} }` à la fin d'un fichier canvas. */
+  private addStory(file: string, base: string, exportName: string, storage: Record<string, string>): Omit<EditResult, 'history'> {
+    if (!CANVAS_FILE.test(file)) throw new SourceError(`${file} n'est pas un fichier *.canvas.tsx.`);
+    if (!/^[A-Za-z_$][\w$]*$/.test(exportName)) throw new SourceError(`Nom de variante invalide : « ${exportName} » (lettres, chiffres, _ ; sans espace).`);
+    const json = JSON.stringify(storage, null, 2);
+    if (json.length > 256 * 1024) throw new SourceError('Stockage trop volumineux pour être enregistré dans une variante (> 256 Ko).', 413);
+
+    const src = this.read(file);
+    const { exports } = storyExports(src.ast);
+    if (exports.includes(exportName)) throw new SourceError(`Une variante « ${exportName} » existe déjà dans ${file}.`, 409);
+    const baseDecl = [...moduleDeclarators(src.ast)].find((d) => d.id.type === 'Identifier' && d.id.name === base);
+    if (!baseDecl?.init || unwrap(baseDecl.init).type !== 'ObjectExpression') {
+      throw new SourceError(`La variante « ${base} » doit être un objet ({ props, setup… }) pour servir de base.`);
+    }
+    const typed = programOf(src.ast).body.some(
+      (s: AstNode) => s.type === 'ImportDeclaration' && s.specifiers.some((sp: AstNode) => sp.local?.name === 'CanvasStory'),
+    );
+    const body = json.split('\n').map((line, i) => (i === 0 ? line : `  ${line}`)).join('\n');
+    const text =
+      `${src.code.endsWith('\n') ? '' : '\n'}\n// Variante enregistrée depuis l'éditeur rn-canvas : « ${base} » avec le stockage capturé de l'écran.\n` +
+      `export const ${exportName}${typed ? ': CanvasStory' : ''} = {\n  ...${base},\n  storage: ${body},\n};\n`;
+    this.write(file, src, [{ start: src.code.length, end: src.code.length, text }]);
+    this.writeManifest();
+    return { ok: true, file, loc: null };
+  }
+
   /** Spécificateur d'import d'un composant depuis `file` (chemin relatif, sans extension). */
   private importPath(file: string, entry: ComponentEntry): string {
     if (!entry.file) return 'react-native';
@@ -320,7 +413,34 @@ export default manifest;
     const abs = this.resolve(file);
     if (fs.readFileSync(abs, 'utf8') !== src.code) throw new SourceError('Le fichier a changé pendant la modification, réessayez.', 409);
     fs.writeFileSync(abs, code);
+    if (this.recording) Object.assign(this.recording, { file, before: src.code, after: code });
     return next;
+  }
+}
+
+/** Libellé lisible d'une modification, affiché dans « Annuler … ». */
+export function describe(request: EditRequest): string {
+  switch (request.op) {
+    case 'setStyle':
+      return `${request.key} sur <${request.name}>`;
+    case 'setText':
+      return `texte de <${request.name}>`;
+    case 'setProp':
+      return `${request.prop} sur <${request.name}>`;
+    case 'setToken':
+      return `jeton ${request.path}`;
+    case 'remove':
+      return `suppression de <${request.name}>`;
+    case 'duplicate':
+      return `duplication de <${request.name}>`;
+    case 'move':
+      return `déplacement de <${request.name}>`;
+    case 'insert':
+      return `ajout de <${request.component.name}>`;
+    case 'addStory':
+      return `variante ${request.exportName}`;
+    default:
+      return 'modification';
   }
 }
 

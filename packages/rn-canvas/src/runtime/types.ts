@@ -15,6 +15,16 @@ export interface CanvasStoryObject<P = Record<string, unknown>> {
   setup?: () => void | (() => void);
   /** Données libres transmises aux wrappers (ex. paramètres de route). */
   parameters?: Record<string, unknown>;
+  /**
+   * Fournisseurs propres à cette variante, à l'intérieur de ceux de rn-canvas.config.tsx : ils
+   * peuvent utiliser les hooks de l'app (ex. useDI()) et préparer des données avec <CanvasSeed>.
+   */
+  wrapper?: ComponentType<CanvasWrapperProps>;
+  /**
+   * Stockage du navigateur (localStorage, donc aussi AsyncStorage sur le web) restauré avant le
+   * premier rendu. Écrit par l'éditeur : « Enregistrer cet état comme variante ».
+   */
+  storage?: Record<string, string>;
 }
 
 export type CanvasStory<P = Record<string, unknown>> = CanvasStoryObject<P> | ComponentType;

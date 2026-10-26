@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
-import type { EditRequest, InspectResult, SourceValue, StyleSource, StyleTarget, ThemeInfo } from '../shared/protocol.ts';
+import type { EditRequest, InspectResult, SourceValue, StyleSource, StyleTarget, ThemeInfo, ValueOrigin } from '../shared/protocol.ts';
 import type { Selection } from './App.tsx';
-import { ColorInput, CommitInput } from './fields.tsx';
+import { type Choice, ColorInput, CommitInput, NumberField, SegmentedField, SelectField, TokenPicker } from './fields.tsx';
 import { displayValue, isColorKey, isToken, parseInput, toHex } from './values.ts';
 
 interface Props {
@@ -13,20 +13,36 @@ interface Props {
 }
 
 const GROUPS: { title: string; keys: string[] }[] = [
-  { title: 'Disposition', keys: ['flex', 'flexDirection', 'alignItems', 'justifyContent', 'gap', 'width', 'height'] },
+  { title: 'Disposition', keys: ['flex', 'flexDirection', 'flexWrap', 'alignItems', 'justifyContent', 'alignSelf', 'gap', 'width', 'height'] },
   { title: 'Espacement', keys: ['padding', 'paddingHorizontal', 'paddingVertical', 'margin', 'marginHorizontal', 'marginVertical'] },
   { title: 'Apparence', keys: ['backgroundColor', 'borderRadius', 'borderWidth', 'borderColor', 'opacity'] },
   { title: 'Texte', keys: ['color', 'fontSize', 'fontWeight', 'lineHeight', 'textAlign'] },
 ];
 const GROUPED = new Set(GROUPS.flatMap((g) => g.keys));
 
-const ENUMS: Record<string, string[]> = {
-  flexDirection: ['row', 'column', 'row-reverse', 'column-reverse'],
-  alignItems: ['flex-start', 'center', 'flex-end', 'stretch', 'baseline'],
-  justifyContent: ['flex-start', 'center', 'flex-end', 'space-between', 'space-around', 'space-evenly'],
-  textAlign: ['auto', 'left', 'center', 'right', 'justify'],
-  fontWeight: ['300', '400', '500', '600', '700', '800', 'normal', 'bold'],
+const choices = (values: string[], labels: Record<string, string> = {}, shorts: Record<string, string> = {}): Choice[] =>
+  values.map((v) => ({ value: v, label: labels[v] ?? v, short: shorts[v] }));
+
+/** Petites listes : boutons segmentés. */
+const SEGMENTED: Record<string, Choice[]> = {
+  flexDirection: choices(['row', 'column', 'row-reverse', 'column-reverse'], { row: 'Ligne', column: 'Colonne', 'row-reverse': 'Ligne inversée', 'column-reverse': 'Colonne inversée' }, { row: '→', column: '↓', 'row-reverse': '←', 'column-reverse': '↑' }),
+  textAlign: choices(['left', 'center', 'right', 'justify'], { left: 'Gauche', center: 'Centré', right: 'Droite', justify: 'Justifié' }, { left: '⇤', center: '↔', right: '⇥', justify: '☰' }),
+  flexWrap: choices(['nowrap', 'wrap'], { nowrap: 'Sur une ligne', wrap: 'Retour à la ligne' }, { nowrap: '—', wrap: '↵' }),
 };
+
+/** Listes plus longues : menu déroulant. */
+const SELECTS: Record<string, Choice[]> = {
+  alignItems: choices(['flex-start', 'center', 'flex-end', 'stretch', 'baseline'], { 'flex-start': 'Début', center: 'Centre', 'flex-end': 'Fin', stretch: 'Étirer', baseline: 'Ligne de base' }),
+  alignSelf: choices(['auto', 'flex-start', 'center', 'flex-end', 'stretch'], { auto: 'Auto', 'flex-start': 'Début', center: 'Centre', 'flex-end': 'Fin', stretch: 'Étirer' }),
+  justifyContent: choices(['flex-start', 'center', 'flex-end', 'space-between', 'space-around', 'space-evenly'], { 'flex-start': 'Début', center: 'Centre', 'flex-end': 'Fin', 'space-between': 'Espacé (bords)', 'space-around': 'Espacé (autour)', 'space-evenly': 'Espacé (égal)' }),
+  fontWeight: choices(['300', '400', '500', '600', '700', '800'], { '300': '300 · Light', '400': '400 · Regular', '500': '500 · Medium', '600': '600 · SemiBold', '700': '700 · Bold', '800': '800 · ExtraBold' }),
+  position: choices(['relative', 'absolute']),
+  overflow: choices(['visible', 'hidden', 'scroll']),
+};
+
+const NUMERIC = /^(flex|flexGrow|flexShrink|gap|rowGap|columnGap|width|height|minWidth|minHeight|maxWidth|maxHeight|top|right|bottom|left|zIndex|elevation|opacity|fontSize|lineHeight|letterSpacing|(padding|margin)(Top|Right|Bottom|Left|Horizontal|Vertical)?|border\w*(Width|Radius))$/;
+const STEP: Record<string, number> = { opacity: 0.05, flex: 1 };
+const MIN: Record<string, number> = { opacity: 0, fontSize: 1, borderWidth: 0 };
 
 /** Clé RN → propriété calculée du DOM, pour afficher la valeur effective en filigrane. */
 const COMPUTED_ALIAS: Record<string, string> = {
@@ -61,7 +77,9 @@ export function Inspector({ selection, theme, root, onSelectAncestor, onEdit }: 
             Cliquez sur un élément d'un écran pour l'inspecter.
             <br />
             <span className="small">
-              Un clic sélectionne l'instance d'un composant, Alt+clic l'élément exact à l'intérieur.
+              Clic : l'élément tel qu'il est écrit dans l'écran · double-clic : entrer dans le composant · Alt+clic : l'élément exact.
+              <br />
+              Glissez un élément sur l'écran pour le déplacer.
               <br />
               V : sélection · I : interaction · Échap : désélectionner
             </span>
@@ -104,19 +122,61 @@ export function Inspector({ selection, theme, root, onSelectAncestor, onEdit }: 
         {screenFile && file !== screenFile && (
           <p className="notice">
             Élément défini dans <b>{file.split('/').pop()}</b> : le modifier ici change <b>toutes les instances</b> de ce composant.
-            Pour ne changer que cet endroit, sélectionnez l'instance dans le fil d'Ariane (ou cliquez sans Alt).
+            Pour ne changer que cet endroit, sélectionnez l'instance dans le fil d'Ariane.
           </p>
         )}
 
         {error && <p className="notice error">{error}</p>}
         {!inspect && !error && <p className="hint">Analyse du code…</p>}
-        {inspect && <Details key={inspect.loc} inspect={inspect} computed={info.computed} theme={theme} onEdit={onEdit} />}
+        {inspect && (
+          <Details
+            key={inspect.loc}
+            inspect={inspect}
+            computed={info.computed}
+            theme={theme}
+            onEdit={onEdit}
+            parent={info.ancestors[1] ?? null}
+            onSelectParent={() => info.ancestors[1] && onSelectAncestor(info.ancestors[1].loc)}
+          />
+        )}
       </div>
     </aside>
   );
 }
 
-function Details({ inspect, computed, theme, onEdit }: { inspect: InspectResult; computed: Record<string, string>; theme: ThemeInfo | null; onEdit: Props['onEdit'] }) {
+interface DetailsProps {
+  inspect: InspectResult;
+  computed: Record<string, string>;
+  theme: ThemeInfo | null;
+  onEdit: Props['onEdit'];
+  /** L'instance qui englobe l'élément (là où se règlent ses props). */
+  parent: { loc: string; name: string } | null;
+  onSelectParent: () => void;
+}
+
+/** « colors : useTheme() (l. 7) · color : prop de AppText » */
+function Origins({ origins, parent, onSelectParent }: { origins?: ValueOrigin[]; parent: DetailsProps['parent']; onSelectParent: () => void }) {
+  if (!origins?.length) return null;
+  const fromProp = origins.some((o) => o.kind === 'prop');
+  return (
+    <div className="origin-note">
+      {origins.map((o, i) => (
+        <span key={o.name}>
+          {i > 0 && ' · '}
+          <code>{o.name}</code> : {o.detail}
+          {o.line ? <span className="muted"> (l. {o.line})</span> : null}
+        </span>
+      ))}
+      {fromProp && parent && (
+        <button className="link" onClick={onSelectParent} title="Les props se règlent sur l'instance qui utilise ce composant">
+          Régler sur l'instance &lt;{parent.name}&gt; ↗
+        </button>
+      )}
+    </div>
+  );
+}
+
+function Details({ inspect, computed, theme, onEdit, parent, onSelectParent }: DetailsProps) {
   const { loc, name } = inspect;
   const sources = inspect.style.sources;
   const [target, setTarget] = useState<StyleTarget>(() => defaultTarget(sources));
@@ -127,11 +187,19 @@ function Details({ inspect, computed, theme, onEdit }: { inspect: InspectResult;
     if (target.kind === 'stylesheet' && !sources.some((s) => s.ref === target.ref)) setTarget(defaultTarget(sources));
   }, [sources, target]);
 
-  const tokens = useMemo(
-    () => (theme?.tokens ?? []).filter((t) => inspect.scope.includes(t.path.split('.')[0])),
-    [theme, inspect.scope],
-  );
-  const tokenValue = (code: string) => theme?.tokens.find((t) => t.path === code)?.value;
+  // Jetons utilisables ici, sous le nom par lequel ce fichier y accède (export ou alias du thème).
+  const tokens = useMemo(() => {
+    if (!theme) return [];
+    const names = [theme.exportName, theme.alias].filter((n): n is string => Boolean(n) && inspect.scope.includes(n!));
+    const via = names.includes(theme.alias ?? '') ? theme.alias! : names[0];
+    if (!via) return [];
+    return theme.tokens.map((t) => {
+      const value = displayValue(t.value);
+      return { path: `${via}.${t.path.split('.').slice(1).join('.')}`, value, hex: toHex(value) };
+    });
+  }, [theme, inspect.scope]);
+  const colorTokens = tokens.filter((t) => t.hex);
+  const tokenValue = (code: string) => tokens.find((t) => t.path === code)?.value;
 
   // Valeur effective (la dernière source l'emporte) et source d'origine de chaque clé.
   const merged = new Map<string, { value: SourceValue; from: string }>();
@@ -149,21 +217,48 @@ function Details({ inspect, computed, theme, onEdit }: { inspect: InspectResult;
     const entry = merged.get(key);
     const text = displayValue(entry?.value);
     const effective = computed[COMPUTED_ALIAS[key] ?? key];
-    const colorSource = entry && isToken(entry.value) ? displayValue(tokenValue(entry.value.code)) : text || effective;
+    const placeholder = effective && effective !== 'auto' && effective !== 'normal' ? effective : '';
+    const token = entry && isToken(entry.value);
+    const colorSource = token ? tokenValue(entry.value.code) ?? effective : text || effective;
     const hex = isColorKey(key) ? toHex(colorSource) : null;
     const overridden = entry && targetSource && entry.from !== targetSource.ref && target.kind === 'stylesheet';
+    // Choix d'une liste : toujours une chaîne (fontWeight '600', pas 600) ; vide = retirer.
+    const commitChoice = (v: string) => (v === '' ? removeStyle(key) : setStyle(key, `'${v}'`));
+
+    let field: React.ReactNode;
+    if (isColorKey(key)) {
+      field = (
+        <>
+          <ColorInput value={hex ?? '#000000'} onCommit={(v) => setStyle(key, v)} />
+          <CommitInput className={token ? 'token-value' : ''} value={text} placeholder={placeholder} onCommit={(v) => setStyle(key, v)} />
+          <TokenPicker tokens={colorTokens} value={text} onPick={(path) => setStyle(key, path)} />
+        </>
+      );
+    } else if (SEGMENTED[key] && !token) {
+      field = <SegmentedField value={text} choices={SEGMENTED[key]} effective={effective} onCommit={commitChoice} />;
+    } else if (SELECTS[key] && !token) {
+      field = <SelectField value={text} choices={SELECTS[key]} placeholder={placeholder} onCommit={commitChoice} />;
+    } else if (NUMERIC.test(key)) {
+      field = (
+        <NumberField
+          className={token ? 'token-value' : ''}
+          value={text}
+          fallback={effective}
+          step={STEP[key] ?? 1}
+          min={MIN[key]}
+          placeholder={placeholder}
+          onCommit={(v) => setStyle(key, v)}
+        />
+      );
+    } else {
+      field = <CommitInput className={token ? 'token-value' : ''} value={text} placeholder={placeholder} onCommit={(v) => setStyle(key, v)} />;
+    }
+
     return (
-      <div key={key} className={`prop-row ${entry ? 'set' : ''}`}>
+      <div key={key} className={`prop-row ${entry ? 'set' : ''}`} title={effective ? `Valeur effective : ${effective}` : undefined}>
         <label title={key}>{key}</label>
         <div className="prop-input">
-          {isColorKey(key) && <ColorInput value={hex ?? '#000000'} onCommit={(v) => setStyle(key, v)} />}
-          <CommitInput
-            className={entry && isToken(entry.value) ? 'token-value' : ''}
-            value={text}
-            placeholder={effective && effective !== 'auto' && effective !== 'normal' ? effective : ''}
-            list={isColorKey(key) ? 'rnc-tokens' : ENUMS[key] ? `rnc-enum-${key}` : undefined}
-            onCommit={(v) => setStyle(key, v)}
-          />
+          {field}
           {inTarget.has(key) ? (
             <button className="icon" title="Retirer" onClick={() => removeStyle(key)}>×</button>
           ) : entry ? (
@@ -172,23 +267,18 @@ function Details({ inspect, computed, theme, onEdit }: { inspect: InspectResult;
             <span className="origin" />
           )}
         </div>
+        {entry?.value.origins && !token && <Origins origins={entry.value.origins} parent={parent} onSelectParent={onSelectParent} />}
+        {entry?.value.origins && token && effective && (
+          <div className="origin-note">
+            = <code>{effective}</code> · {entry.value.origins.map((o) => `${o.name} : ${o.detail}`).join(' · ')}
+          </div>
+        )}
       </div>
     );
   };
 
   return (
     <>
-      <datalist id="rnc-tokens">
-        {tokens.map((t) => (
-          <option key={t.path} value={t.path}>{displayValue(t.value)}</option>
-        ))}
-      </datalist>
-      {Object.entries(ENUMS).map(([key, values]) => (
-        <datalist key={key} id={`rnc-enum-${key}`}>
-          {values.map((v) => <option key={v} value={v} />)}
-        </datalist>
-      ))}
-
       {inspect.text && (
         <section className="section">
           <h3>Texte</h3>
@@ -254,9 +344,18 @@ function Details({ inspect, computed, theme, onEdit }: { inspect: InspectResult;
               <p className="notice small">Ce style est partagé : la modification touche tous les éléments qui l'utilisent.</p>
             )}
             {sources.some((s) => s.kind === 'unknown') && (
-              <p className="hint small">
-                Styles non analysables : {sources.filter((s) => s.kind === 'unknown').map((s) => s.ref).join(', ')}
-              </p>
+              <div className="computed-sources">
+                <h4>Calculé à l'exécution</h4>
+                {sources
+                  .filter((s) => s.kind === 'unknown')
+                  .map((s) => (
+                    <div key={s.ref} className="computed-source">
+                      <code>{s.ref}</code>
+                      <Origins origins={s.origins} parent={parent} onSelectParent={onSelectParent} />
+                    </div>
+                  ))}
+                <p className="hint small">Ces styles ne sont pas écrits ici : modifiez leur source, ou surchargez-les avec « Cet élément uniquement ».</p>
+              </div>
             )}
             {GROUPS.map((g) => (
               <div key={g.title} className="style-group">

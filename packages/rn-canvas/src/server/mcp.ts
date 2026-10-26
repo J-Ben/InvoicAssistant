@@ -69,6 +69,18 @@ export function mcpTools(project: Project): Tool[] {
       run: () => project.theme(),
     },
     {
+      name: 'undo',
+      description: 'Annule la dernière modification faite via rn-canvas (éditeur ou IA).',
+      inputSchema: schema({}, []),
+      run: () => project.undo(),
+    },
+    {
+      name: 'redo',
+      description: 'Rétablit la dernière modification annulée.',
+      inputSchema: schema({}, []),
+      run: () => project.redo(),
+    },
+    {
       name: 'list_elements',
       description: "Arbre des éléments JSX d'un fichier, avec leur emplacement, à utiliser dans les autres outils.",
       inputSchema: schema({ file: { type: 'string', description: 'Chemin relatif au projet, ex. src/screens/HomeScreen.tsx' } }, ['file']),

@@ -1,4 +1,4 @@
-import type { EditRequest, EditResult, InspectResult, ProjectInfo } from '../shared/protocol.ts';
+import type { EditRequest, EditResult, HistoryState, InspectResult, ProjectInfo } from '../shared/protocol.ts';
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
   const res = await fetch(url, init);
@@ -22,6 +22,9 @@ export const api = {
     request<InspectResult>(`/api/inspect?loc=${encodeURIComponent(loc)}${name ? `&name=${encodeURIComponent(name)}` : ''}`),
   edit: (body: EditRequest) =>
     request<EditResult>('/api/edit', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }),
+  history: () => request<HistoryState>('/api/history'),
+  undo: () => request<EditResult>('/api/undo', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' }),
+  redo: () => request<EditResult>('/api/redo', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' }),
   events(onEvent: (type: string) => void): () => void {
     const source = new EventSource('/api/events');
     source.addEventListener('stories', () => onEvent('stories'));

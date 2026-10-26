@@ -232,3 +232,18 @@ test('jetons locaux au composant : acceptés sur l’élément, refusés (avec e
   project.edit({ op: 'setProp', loc, name: 'View', prop: 'tint', value: { kind: 'expression', code: 'colors.bg' } });
   assert.ok(fs.readFileSync(path.join(project.root, file), 'utf8').includes('tint={colors.bg}'));
 });
+
+test("addStory : nouvelle variante à partir d'une existante, avec le stockage capturé", () => {
+  const { project, root } = fixture();
+  const file = 'src/screens/Card.canvas.tsx';
+  const result = project.edit({ op: 'addStory', file, base: 'Default', exportName: 'AvecDonnees', storage: { '@messages': '[{"id":"1"}]' } });
+  assert.equal(result.loc, null);
+  const code = fs.readFileSync(path.join(root, file), 'utf8');
+  assert.ok(code.endsWith(`export const AvecDonnees = {\n  ...Default,\n  storage: {\n    "@messages": "[{\\"id\\":\\"1\\"}]"\n  },\n};\n`), code);
+  assert.ok(project.stories()[0].stories.some((s) => s.exportName === 'AvecDonnees'));
+  assert.throws(() => project.edit({ op: 'addStory', file, base: 'Default', exportName: 'AvecDonnees', storage: {} }), /existe déjà/);
+  assert.throws(() => project.edit({ op: 'addStory', file, base: 'Default', exportName: 'avec espace', storage: {} }), /invalide/);
+  assert.throws(() => project.edit({ op: 'addStory', file: 'src/screens/Card.tsx', base: 'Default', exportName: 'X', storage: {} }), /canvas/);
+  project.undo();
+  assert.ok(!fs.readFileSync(path.join(root, file), 'utf8').includes('AvecDonnees'));
+});

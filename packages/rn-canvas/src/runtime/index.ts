@@ -11,6 +11,8 @@ import type { CanvasManifest } from './types';
 
 export type { CanvasManifest, CanvasMeta, CanvasRuntimeConfig, CanvasStory, CanvasStoryObject, CanvasWrapperProps } from './types';
 
+export { CanvasSeed } from './seed';
+
 export const STORY_PARAM = 'rnc-story';
 
 /**

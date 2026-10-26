@@ -16,6 +16,8 @@ interface Props {
   onHoverLayer: (loc: string | null) => void;
   selection: Selection | null;
   onEdit: (request: EditRequest) => void;
+  /** Capture le stockage de l'écran et l'enregistre comme nouvelle variante. */
+  onSaveVariant: (storyId: string, exportName: string) => void;
 }
 
 type Tab = 'screens' | 'layers' | 'components' | 'theme';
@@ -24,6 +26,15 @@ type Tab = 'screens' | 'layers' | 'components' | 'theme';
 type DragItem = { kind: 'layer'; loc: string; name: string } | { kind: 'component'; name: string; file: string | null };
 const DRAG_TYPE = 'application/x-rn-canvas';
 let dragging: DragItem | null = null;
+// Dernier composant glissé : un dépôt sur l'écran arrive par message, parfois après « dragend ».
+let lastComponent: { name: string; file: string | null } | null = null;
+
+/** Composant en cours de dépôt sur un écran (lu une seule fois). */
+export function takeDraggedComponent(): { name: string; file: string | null } | null {
+  const c = lastComponent;
+  lastComponent = null;
+  return c;
+}
 
 const CONTAINERS = new Set(['View', 'ScrollView', 'SafeAreaView', 'KeyboardAvoidingView', 'Pressable', 'TouchableOpacity', 'TouchableHighlight']);
 const fileOf = (loc: string) => loc.split(':')[0];
@@ -48,10 +59,13 @@ export function Sidebar(props: Props) {
   );
 }
 
-function Screens({ project, hidden, onToggleStory, activeStory, onActivateStory }: Props) {
+function Screens({ project, hidden, onToggleStory, activeStory, onActivateStory, onSaveVariant }: Props) {
+  const [saving, setSaving] = useState<string | null>(null);
+  const [name, setName] = useState('');
   if (project.stories.length === 0) return <p className="hint">Aucun fichier *.canvas.tsx trouvé.</p>;
   return (
     <>
+      <p className="hint small">Une variante peut garder l'état d'un écran : remplissez-le en mode Interaction, puis « ＋ État ».</p>
       {project.stories.map((group) => (
         <div key={group.file} className="group">
           <div className="group-title" title={group.file}>{group.title}</div>
@@ -59,8 +73,32 @@ function Screens({ project, hidden, onToggleStory, activeStory, onActivateStory 
             <div key={story.id} className={`row ${activeStory === story.id ? 'selected' : ''}`}>
               <input type="checkbox" checked={!hidden.has(story.id)} onChange={() => onToggleStory(story.id)} aria-label={`Afficher ${story.title}`} />
               <button className="row-label" onClick={() => onActivateStory(story.id)}>{story.title}</button>
+              <button
+                className="icon small-action"
+                title="Enregistrer l'état actuel de cet écran comme nouvelle variante"
+                onClick={() => {
+                  setSaving(saving === story.id ? null : story.id);
+                  setName(`${story.exportName}Rempli`);
+                }}
+              >
+                ＋
+              </button>
             </div>
           ))}
+          {group.stories.some((s) => s.id === saving) && (
+            <form
+              className="save-variant"
+              onSubmit={(e) => {
+                e.preventDefault();
+                if (!saving || !name.trim()) return;
+                onSaveVariant(saving, name.trim());
+                setSaving(null);
+              }}
+            >
+              <input autoFocus value={name} onChange={(e) => setName(e.target.value.replace(/[^\w$]/g, ''))} placeholder="NomDeLaVariante" spellCheck={false} />
+              <button type="submit">Enregistrer</button>
+            </form>
+          )}
         </div>
       ))}
     </>
@@ -203,6 +241,7 @@ function Components({ project, selection, onEdit }: Props) {
               aria-disabled={!selection}
               onDragStart={(e) => {
                 dragging = { kind: 'component', name: c.name, file: c.file };
+                lastComponent = { name: c.name, file: c.file };
                 e.dataTransfer.setData(DRAG_TYPE, c.name);
                 e.dataTransfer.effectAllowed = 'copy';
               }}

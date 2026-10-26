@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { CanvasMode, EditorMessage, Payload, EditRequest, InspectResult, LayerNode, ProjectInfo, RuntimeMessage, SelectionInfo } from '../shared/protocol.ts';
+import type { CanvasMode, EditorMessage, Payload, EditRequest, HistoryState, InspectResult, LayerNode, ProjectInfo, RuntimeMessage, SelectionInfo } from '../shared/protocol.ts';
 import { api } from './api.ts';
 import { Canvas, DEVICES, type Device } from './Canvas.tsx';
 import { Inspector } from './Inspector.tsx';
-import { Sidebar } from './Sidebar.tsx';
+import { Sidebar, takeDraggedComponent } from './Sidebar.tsx';
 
 type ThemePref = 'system' | 'light' | 'dark';
 const THEME_KEY = 'rn-canvas:theme';
@@ -38,6 +38,7 @@ export function App() {
   const [selection, setSelection] = useState<Selection | null>(null);
   const [toast, setToast] = useState<{ kind: 'error' | 'ok'; text: string } | null>(null);
   const [themePref, setThemePref] = useState<ThemePref>(readThemePref);
+  const [history, setHistory] = useState<HistoryState>({ undo: null, redo: null });
   const frames = useRef(new Map<string, HTMLIFrameElement>());
   const modeRef = useRef(mode);
   modeRef.current = mode;
@@ -50,6 +51,10 @@ export function App() {
         setLoadError(null);
       })
       .catch((e) => setLoadError(e.message));
+  }, []);
+
+  useEffect(() => {
+    api.history().then(setHistory).catch(() => {});
   }, []);
 
   useEffect(() => {
@@ -109,6 +114,22 @@ export function App() {
         case 'error':
           setStoryErrors((e) => ({ ...e, [data.story]: data.message }));
           break;
+        case 'snapshot':
+          snapshots.current.get(data.requestId)?.(data.storage);
+          snapshots.current.delete(data.requestId);
+          break;
+        case 'drop':
+          if (data.kind === 'move' && data.from) {
+            editRef.current({ op: 'move', loc: data.from.loc, name: data.from.name, target: data.target.loc, targetName: data.target.name, position: data.position });
+          } else if (data.kind === 'component') {
+            const component = takeDraggedComponent();
+            if (component) editRef.current({ op: 'insert', loc: data.target.loc, name: data.target.name, position: data.position, component });
+          }
+          break;
+        case 'key':
+          // Rejoue le raccourci dans l'éditeur, comme s'il avait été tapé ici.
+          window.dispatchEvent(new KeyboardEvent('keydown', { key: data.key, metaKey: data.metaKey, ctrlKey: data.ctrlKey, shiftKey: data.shiftKey, altKey: data.altKey }));
+          break;
       }
     };
     window.addEventListener('message', onMessage);
@@ -130,7 +151,7 @@ export function App() {
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if ((e.target as HTMLElement)?.closest('input, textarea, select')) return;
+      if ((e.target as HTMLElement)?.closest?.('input, textarea, select')) return;
       if (e.key === 'Escape') {
         setSelection(null);
         send(null, { type: 'select', loc: null });
@@ -154,7 +175,8 @@ export function App() {
       const seq = ++inspectSeq.current;
       try {
         const result = await api.edit(request);
-        if (request.op === 'setToken') {
+        setHistory(result.history);
+        if (request.op === 'setToken' || request.op === 'addStory') {
           loadProject();
         } else if (STRUCTURAL.has(request.op)) {
           // Nouvel élément (ou supprimé) : l'écran le resélectionne dès que le Fast Refresh l'a rendu.
@@ -163,7 +185,7 @@ export function App() {
             setSelection(null);
             send(null, { type: 'select', loc: null });
           } else if (story) {
-            selectLoc(story, result.loc, request.op === 'insert' ? request.component.name : request.name);
+            selectLoc(story, result.loc, request.op === 'insert' ? request.component.name : 'name' in request ? request.name : undefined);
           }
           if (request.op === 'insert') loadProject();
         } else if (selection && result.loc) {
@@ -183,10 +205,75 @@ export function App() {
     [selection, activeStory, send, selectLoc, loadProject],
   );
 
+  // Variante depuis l'état d'un écran : on demande son stockage, puis on l'écrit dans le fichier canvas.
+  const snapshots = useRef(new Map<number, (storage: Record<string, string>) => void>());
+  const saveVariant = useCallback(
+    async (storyId: string, exportName: string) => {
+      const story = stories.find((s) => s.id === storyId);
+      if (!story) return;
+      try {
+        const requestId = Date.now();
+        const storage = await new Promise<Record<string, string>>((resolve, reject) => {
+          snapshots.current.set(requestId, resolve);
+          send(storyId, { type: 'snapshot', requestId });
+          window.setTimeout(() => snapshots.current.delete(requestId) && reject(new Error("L'écran ne répond pas : rechargez-le et réessayez.")), 3000);
+        });
+        await edit({ op: 'addStory', file: story.file, base: story.exportName, exportName, storage });
+        setHidden((h) => {
+          const next = new Set(h);
+          next.delete(`${story.file}#${exportName}`);
+          return next;
+        });
+      } catch (e) {
+        showError((e as Error).message);
+      }
+    },
+    [stories, send],
+  );
+
+  const editRef = useRef(edit);
+  editRef.current = edit;
+
+  const travel = useCallback(
+    async (direction: 'undo' | 'redo') => {
+      ++inspectSeq.current;
+      try {
+        const result = await (direction === 'undo' ? api.undo() : api.redo());
+        setHistory(result.history);
+        loadProject();
+        const story = selection?.story ?? activeStory;
+        if (result.loc && story) selectLoc(story, result.loc);
+        else if (!result.loc) {
+          setSelection(null);
+          send(null, { type: 'select', loc: null });
+        }
+        setToast({ kind: 'ok', text: `${direction === 'undo' ? 'Annulé' : 'Rétabli'} dans ${result.file}` });
+      } catch (e) {
+        showError((e as Error).message);
+        api.history().then(setHistory).catch(() => {});
+      }
+    },
+    [selection, activeStory, selectLoc, send, loadProject],
+  );
+
+  // ⌘Z / ⇧⌘Z (ou ⌘Y) : annuler / rétablir. Dans un champ de saisie, on laisse l'annulation du champ.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (!(e.metaKey || e.ctrlKey) || (e.target as HTMLElement)?.closest?.('input, textarea, select')) return;
+      const key = e.key.toLowerCase();
+      if (key === 'z' || key === 'y') {
+        e.preventDefault();
+        travel(key === 'y' || e.shiftKey ? 'redo' : 'undo');
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [travel]);
+
   // Raccourcis : Suppr pour supprimer, ⌘/Ctrl+D pour dupliquer l'élément sélectionné.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (!selection || (e.target as HTMLElement)?.closest('input, textarea, select')) return;
+      if (!selection || (e.target as HTMLElement)?.closest?.('input, textarea, select')) return;
       const { loc, name } = selection.info;
       if (e.key === 'Delete' || e.key === 'Backspace') {
         e.preventDefault();
@@ -230,6 +317,14 @@ export function App() {
             Interaction
           </button>
         </div>
+        <div className="history" role="group" aria-label="Historique">
+          <button disabled={!history.undo} onClick={() => travel('undo')} title={history.undo ? `Annuler ${history.undo} (⌘Z)` : 'Rien à annuler'}>
+            ↶
+          </button>
+          <button disabled={!history.redo} onClick={() => travel('redo')} title={history.redo ? `Rétablir ${history.redo} (⇧⌘Z)` : 'Rien à rétablir'}>
+            ↷
+          </button>
+        </div>
         <button
           className="theme-toggle"
           onClick={() => setThemePref((t) => (t === 'system' ? 'light' : t === 'light' ? 'dark' : 'system'))}
@@ -267,6 +362,7 @@ export function App() {
         onHoverLayer={(loc) => activeStory && send(activeStory, { type: 'hover', loc })}
         selection={selection}
         onEdit={edit}
+        onSaveVariant={saveVariant}
       />
 
       <Canvas

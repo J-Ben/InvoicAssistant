@@ -59,6 +59,24 @@ export const AvecDonnees: CanvasStory = {
 | `render` | Rendu personnalisé (prioritaire sur `component`) |
 | `setup` | Exécuté avant le premier rendu, pour remplir un store par exemple. Peut retourner une fonction de nettoyage. |
 | `parameters` | Données libres transmises au wrapper, comme les paramètres de route |
+| `wrapper` | Fournisseurs propres à la variante, à l'intérieur de ceux de `rn-canvas.config.tsx` : ils peuvent utiliser les hooks de l'app |
+| `storage` | Stockage du navigateur (localStorage, donc AsyncStorage sur le web) restauré avant le rendu. Écrit par l'éditeur avec « ＋ » |
+
+**Variantes pré-remplies.** Deux façons d'afficher un écran dans un état précis (vide, chargé, erreur…) sans repasser par le mode Interaction :
+
+- **Sans code** : remplissez l'écran en mode Interaction, puis cliquez sur « ＋ » à côté de la variante dans l'onglet Écrans et donnez-lui un nom. L'éditeur capture le stockage de l'écran et écrit `export const MaVariante = { ...Base, storage: {…} }` dans le fichier canvas.
+- **En code**, pour des données qui ne sont pas dans le stockage (base SQLite, API…) : un `wrapper` de variante et `CanvasSeed`, qui affiche l'écran une fois les données prêtes.
+
+```tsx
+import { CanvasSeed, type CanvasStory } from 'rn-canvas/runtime';
+
+export const BudgetRempli: CanvasStory = {
+  wrapper: ({ children }) => {
+    const di = useDI();
+    return <CanvasSeed run={() => seedBudget(di)}>{children}</CanvasSeed>;
+  },
+};
+```
 
 Les fournisseurs communs (navigation, thème, React Query…) se déclarent une fois dans `rn-canvas.config.tsx` :
 
@@ -78,14 +96,17 @@ npm run canvas        # = rn-canvas dev : démarre Expo si besoin, puis l'édite
 
 Ouvrez **http://localhost:7007**.
 
-- **Sélection (V)** : un clic sur un élément ouvre l'inspecteur (texte, props, styles). Comme dans Figma, un clic à l'intérieur d'un composant sélectionne **l'instance** du composant (ses props, son style à cet endroit) ; **Alt+clic** sélectionne l'élément exact dans le code du composant (le modifier touche alors toutes ses instances).
+- **Sélection (V)** : un clic sur un élément ouvre l'inspecteur (texte, props, styles). Comme dans Figma : un **clic** sélectionne l'élément tel qu'il est écrit dans l'écran (ex. `<QuickActionsSection>`) ; un **double-clic** descend d'un niveau dans le composant ; une fois à l'intérieur, les clics suivants restent à ce niveau ; **Alt+clic** sélectionne l'élément exact (le modifier touche alors toutes les instances du composant).
 - **Interaction (I)** : l'app réagit normalement (boutons, saisie…).
 - Le **fil d'Ariane** permet de remonter du `Text` interne d'un composant à son instance dans l'écran. On modifie alors soit le composant (toutes ses instances), soit seulement les props de cette instance, comme les composants principaux et les instances de Figma.
 - **Styles** : choisissez la cible. Un style partagé de `StyleSheet.create` touche tous les éléments qui l'utilisent ; « Cet élément uniquement » ajoute une surcharge (`[styles.x, { … }]`).
 - **Jetons** : tapez `colors.primary` pour référencer le thème plutôt qu'une valeur en dur.
 - **Thème** : l'onglet Thème modifie l'objet configuré (`theme` dans `rn-canvas.json`), et donc toute l'app.
-- **Structure** : boutons Dupliquer et Supprimer de l'inspecteur, ou raccourcis ⌘/Ctrl+D et Suppr. Dans l'onglet Calques, un glisser-déposer déplace un élément : en haut du calque cible pour le placer avant, en bas pour après, au milieu pour le mettre dedans.
-- **Composants** : l'onglet liste les composants exportés par le projet et quelques primitives React Native. Un clic insère le composant dans l'élément sélectionné (s'il s'agit d'un conteneur) ou juste après ; on peut aussi le glisser vers les calques. L'import est ajouté, et les props obligatoires (lues dans l'interface `NomProps`) reçoivent des valeurs d'exemple.
+- **Champs** : chaque propriété a le champ adapté. Valeurs numériques : **⌘/Ctrl + molette** ou flèches ↑/↓ pour les ajuster (Maj ×10, Alt ×0,1), écriture dans le code à la fin du réglage. Directions et alignements : boutons ou listes. Couleurs : pastille et sélecteur de jetons du thème.
+- **Styles calculés** : une valeur qui n'est pas écrite en dur (`color ?? colors.text`, `typography[variant]`, prop `style`…) est expliquée : prop du composant, hook (`useTheme()`, avec sa ligne), import ou variable locale, avec sa valeur effective. Si elle vient d'une prop, un lien sélectionne l'instance où la régler.
+- **Annuler / rétablir** : ⌘Z et ⇧⌘Z (ou les flèches de la barre du haut), y compris pour les modifications faites par une IA via MCP. Un fichier modifié entre-temps dans votre éditeur de code n'est jamais écrasé : l'annulation est alors refusée.
+- **Structure** : boutons Dupliquer et Supprimer de l'inspecteur, ou raccourcis ⌘/Ctrl+D et Suppr. **Glissez un élément directement sur l'écran** (ou dans l'onglet Calques) pour le déplacer : en haut de la cible pour le placer avant, en bas pour après, au milieu pour le mettre dedans. Un repère vert montre l'emplacement, rouge si le déplacement est impossible (autre fichier, dans lui-même).
+- **Composants** : l'onglet liste les composants exportés par le projet et quelques primitives React Native. Un clic insère le composant dans l'élément sélectionné (s'il s'agit d'un conteneur) ou juste après ; on peut aussi le **glisser sur l'écran** ou vers les calques. L'import est ajouté, et les props obligatoires (lues dans l'interface `NomProps`) reçoivent des valeurs d'exemple.
 - **Thème de l'éditeur** : le bouton Système / Clair / Sombre de la barre du haut. Le choix est mémorisé dans le navigateur.
 
 ## Piloter les écrans depuis une IA (MCP)
@@ -112,10 +133,12 @@ Si l'éditeur est ouvert en même temps, il affiche les modifications de l'IA en
 {
   "appUrl": "http://localhost:8081",
   "include": ["src"],
-  "theme": { "file": "src/theme/colors.ts", "export": "colors" },
+  "theme": { "file": "src/theme/colors.ts", "export": "colors", "alias": "colors" },
   "isolateStories": true
 }
 ```
+
+`theme.alias` (optionnel) : nom sous lequel les composants accèdent au thème, s'il diffère de l'export. Par exemple `"export": "LIGHT_COLORS", "alias": "colors"` quand les composants écrivent `const { colors } = useTheme()` : le sélecteur de jetons propose alors `colors.primary`.
 
 `isolateStories` (activé par défaut si l'app tourne sur `localhost`) : chaque écran est servi depuis son propre sous-domaine (`accueil-actuel-1k2j.localhost:8081`), que les navigateurs résolvent vers la machine locale. Chaque écran a ainsi son propre stockage (localStorage, IndexedDB, OPFS) : pas de conflit entre écrans affichés en parallèle, ce qui est indispensable pour expo-sqlite sur le web, dont la base ne s'ouvre que dans un seul onglet à la fois.
 

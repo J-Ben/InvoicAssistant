@@ -155,12 +155,47 @@ function patternNames(pattern: AstNode | null | undefined, out: Set<string>): vo
   }
 }
 
+export interface Binding {
+  kind: 'prop' | 'hook' | 'import' | 'module' | 'local' | 'param';
+  detail: string;
+  line: number | null;
+}
+
 /**
  * Noms accessibles à l'endroit de `node` : ceux du module, plus les paramètres et variables des
  * fonctions et blocs qui l'entourent (ex. `const { colors, spacing } = useTheme()`).
  */
 export function scopeAt(ast: AstNode, node: AstNode): string[] {
-  const names = new Set(moduleScope(ast));
+  return [...bindingsAt(ast, node).keys()].sort();
+}
+
+function snippet(code: string, max = 48): string {
+  const one = code.replace(/\s+/g, ' ').trim();
+  return one.length > max ? `${one.slice(0, max - 1)}…` : one;
+}
+
+/** Comme scopeAt, avec l'origine de chaque nom (le plus proche l'emporte). */
+export function bindingsAt(ast: AstNode, node: AstNode, code = ''): Map<string, Binding> {
+  const bindings = new Map<string, Binding>();
+  const set = (names: Set<string>, binding: Binding) => {
+    for (const n of names) bindings.set(n, binding);
+  };
+
+  for (const stmt of programOf(ast).body) {
+    const decl = stmt.type === 'ExportNamedDeclaration' && stmt.declaration ? stmt.declaration : stmt;
+    if (decl.type === 'ImportDeclaration' && decl.importKind !== 'type') {
+      for (const s of decl.specifiers) if (s.importKind !== 'type') bindings.set(s.local.name, { kind: 'import', detail: `import de '${decl.source.value}'`, line: decl.loc.start.line });
+    } else if (decl.type === 'VariableDeclaration') {
+      for (const d of decl.declarations) {
+        const names = new Set<string>();
+        patternNames(d.id, names);
+        set(names, { kind: 'module', detail: d.init && code ? snippet(code.slice(d.init.start, d.init.end)) : 'constante du fichier', line: d.loc.start.line });
+      }
+    } else if ((decl.type === 'FunctionDeclaration' || decl.type === 'ClassDeclaration') && decl.id) {
+      bindings.set(decl.id.name, { kind: 'module', detail: decl.type === 'ClassDeclaration' ? 'classe du fichier' : 'fonction du fichier', line: decl.loc.start.line });
+    }
+  }
+
   let chain: AstNode[] = [];
   walk(ast, (n, parents) => {
     if (chain.length) return false;
@@ -170,16 +205,62 @@ export function scopeAt(ast: AstNode, node: AstNode): string[] {
     }
     if (n.start > node.start || n.end < node.end) return false;
   });
-  for (const parent of chain) {
-    if (FUNCTIONS.has(parent.type)) for (const param of parent.params) patternNames(param, names);
+  // La première fonction englobante est le composant : ses paramètres sont des props.
+  let component: string | null = null;
+  let first = true;
+  for (let i = 0; i < chain.length; i++) {
+    const parent = chain[i];
+    if (FUNCTIONS.has(parent.type)) {
+      if (first) component = functionName(parent, chain[i - 1]);
+      for (const param of parent.params) {
+        const names = new Set<string>();
+        patternNames(param, names);
+        set(names, first ? { kind: 'prop', detail: `prop de ${component ?? 'ce composant'}`, line: param.loc.start.line } : { kind: 'param', detail: 'paramètre de fonction', line: param.loc.start.line });
+      }
+      first = false;
+    }
     if (parent.type === 'BlockStatement') {
       for (const stmt of parent.body) {
-        if (stmt.type === 'VariableDeclaration') for (const d of stmt.declarations) patternNames(d.id, names);
-        if ((stmt.type === 'FunctionDeclaration' || stmt.type === 'ClassDeclaration') && stmt.id) names.add(stmt.id.name);
+        if (stmt.type === 'VariableDeclaration') {
+          for (const d of stmt.declarations) {
+            const names = new Set<string>();
+            patternNames(d.id, names);
+            const init = d.init ? unwrap(d.init) : null;
+            const callee = init?.type === 'CallExpression' ? memberPath(init.callee) : null;
+            const hook = callee && /(^|\.)use[A-Z]\w*$/.test(callee);
+            set(names, {
+              kind: hook ? 'hook' : 'local',
+              detail: hook ? `${callee}()` : init && code ? snippet(code.slice(init.start, init.end)) : 'variable locale',
+              line: d.loc.start.line,
+            });
+          }
+        }
+        if ((stmt.type === 'FunctionDeclaration' || stmt.type === 'ClassDeclaration') && stmt.id) {
+          bindings.set(stmt.id.name, { kind: 'local', detail: 'fonction locale', line: stmt.loc.start.line });
+        }
       }
     }
   }
-  return [...names].sort();
+  return bindings;
+}
+
+function functionName(fn: AstNode, parent: AstNode | undefined): string | null {
+  if (fn.id?.name) return fn.id.name;
+  if (parent?.type === 'VariableDeclarator' && parent.id.type === 'Identifier') return parent.id.name;
+  return null;
+}
+
+/** Noms (identifiants libres) utilisés par une expression : `color ?? colors.text` → color, colors. */
+export function freeNames(expression: AstNode): string[] {
+  const names = new Set<string>();
+  walk(expression, (n, parents) => {
+    const parent = parents[parents.length - 1];
+    if (n.type !== 'Identifier') return;
+    if (parent?.type === 'MemberExpression' && parent.property === n && !parent.computed) return;
+    if (parent?.type === 'ObjectProperty' && parent.key === n && !parent.computed) return;
+    names.add(n.name);
+  });
+  return [...names];
 }
 
 /** Retire les enveloppes TypeScript (`as const`, `satisfies`, `!`, parenthèses). */

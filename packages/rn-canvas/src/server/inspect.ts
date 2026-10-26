@@ -1,8 +1,9 @@
 /**
  * Analyse statique d'un élément JSX : texte, props et styles, avec l'origine de chaque valeur.
  */
-import type { InspectResult, SourceValue, StyleSource } from '../shared/protocol.ts';
-import { type AstNode, type SourceFile, codeOf, findProperty, jsxElements, jsxName, memberPath, moduleDeclarators, propertyKey, scopeAt, unwrap, walk } from './ast.ts';
+import * as babelParser from '@babel/parser';
+import type { InspectResult, SourceValue, StyleSource, ValueOrigin } from '../shared/protocol.ts';
+import { type AstNode, type SourceFile, codeOf, findProperty, jsxElements, jsxName, memberPath, moduleDeclarators, propertyKey, scopeAt, unwrap, walk, type Binding, bindingsAt, freeNames } from './ast.ts';
 
 export class SourceError extends Error {
   readonly status: number;
@@ -162,7 +163,7 @@ export function inspectElement(src: SourceFile, file: string, element: AstNode):
   const styleAttr = styleAttribute(element);
   const styleExpr = styleAttr?.value?.type === 'JSXExpressionContainer' ? styleAttr.value.expression : null;
 
-  return {
+  const result: InspectResult = {
     loc: `${file}:${line}:${column}`,
     file,
     name,
@@ -175,6 +176,8 @@ export function inspectElement(src: SourceFile, file: string, element: AstNode):
     },
     scope: scopeAt(src.ast, element),
   };
+  annotateOrigins(result, bindingsAt(src.ast, element, src.code));
+  return result;
 }
 
 function attrValue(src: SourceFile, attr: AstNode): SourceValue | null {
@@ -212,4 +215,29 @@ export function normalizeJsxText(raw: string): string {
     .map((line) => line.trim())
     .filter(Boolean)
     .join(' ');
+}
+
+/** Ajoute à chaque expression (styles, props) l'origine des noms qu'elle utilise. */
+function annotateOrigins(result: InspectResult, bindings: Map<string, Binding>): void {
+  const explain = (code: string): ValueOrigin[] | undefined => {
+    let expression: AstNode;
+    try {
+      expression = babelParser.parseExpression(code, { plugins: ['typescript', 'jsx'] }) as unknown as AstNode;
+    } catch {
+      return undefined;
+    }
+    const origins = freeNames(expression).map((name): ValueOrigin => {
+      const b = bindings.get(name);
+      return b ? { name, ...b } : { name, kind: 'unknown', detail: 'origine inconnue (global ?)', line: null };
+    });
+    return origins.length ? origins : undefined;
+  };
+  const annotate = (value: SourceValue | null) => {
+    if (value?.kind === 'expression' && !value.code.startsWith('...')) value.origins = explain(value.code);
+  };
+  for (const source of result.style.sources) {
+    if (source.kind === 'unknown') source.origins = explain(source.ref);
+    for (const p of source.properties) annotate(p.value);
+  }
+  for (const p of result.props) annotate(p.value);
 }

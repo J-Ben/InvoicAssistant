@@ -8,6 +8,7 @@ interface ResolvedStory {
   wrappers: ComponentType<CanvasWrapperProps>[];
   setups: (() => void | (() => void))[];
   parameters: Record<string, unknown>;
+  storage: Record<string, string> | null;
 }
 
 function resolveStory(storyId: string, manifest: CanvasManifest): ResolvedStory {
@@ -25,7 +26,7 @@ function resolveStory(storyId: string, manifest: CanvasManifest): ResolvedStory 
   const wrappers = [manifest.config?.wrapper, meta.wrapper].filter(Boolean) as ComponentType<CanvasWrapperProps>[];
 
   if (typeof story === 'function') {
-    return { render: () => h(story), wrappers, setups: meta.setup ? [meta.setup] : [], parameters: meta.parameters ?? {} };
+    return { render: () => h(story), wrappers, setups: meta.setup ? [meta.setup] : [], parameters: meta.parameters ?? {}, storage: null };
   }
 
   const s = story as CanvasStoryObject;
@@ -39,9 +40,10 @@ function resolveStory(storyId: string, manifest: CanvasManifest): ResolvedStory 
         };
   return {
     render,
-    wrappers,
+    wrappers: s.wrapper ? [...wrappers, s.wrapper] : wrappers,
     setups: [meta.setup, s.setup].filter(Boolean) as ResolvedStory['setups'],
     parameters: { ...meta.parameters, ...s.parameters },
+    storage: s.storage ?? null,
   };
 }
 
@@ -50,6 +52,7 @@ export function CanvasHost({ storyId, loadManifest }: { storyId: string; loadMan
   const [state] = useState(() => {
     try {
       const story = resolveStory(storyId, loadManifest());
+      if (story.storage) restoreStorage(story.storage);
       const cleanups = story.setups.map((setup) => setup());
       return { story, cleanups, error: null as Error | null };
     } catch (error) {
@@ -74,6 +77,16 @@ export function CanvasHost({ storyId, loadManifest }: { storyId: string; loadMan
     element = h(Wrapper, { story: { id: storyId, parameters: story.parameters }, children: element });
   }
   return h(ErrorBoundary, { storyId }, h(View, { style: styles.root }, element));
+}
+
+/** Remplace le stockage de l'écran par celui de la variante (chaque écran a sa propre origine). */
+function restoreStorage(storage: Record<string, string>) {
+  try {
+    window.localStorage.clear();
+    for (const [key, value] of Object.entries(storage)) window.localStorage.setItem(key, value);
+  } catch {
+    // Stockage indisponible : la variante s'affiche avec l'état par défaut.
+  }
 }
 
 function StoryRender({ render }: { render: () => ReactElement }) {

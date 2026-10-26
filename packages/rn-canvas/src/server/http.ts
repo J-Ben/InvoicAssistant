@@ -61,6 +61,10 @@ export function startServer(project: Project, options: ServerOptions): Promise<C
         return send(res, 200, project.edit(body));
       }
 
+      if (url.pathname === '/api/history' && req.method === 'GET') return send(res, 200, project.history());
+      if (url.pathname === '/api/undo' && req.method === 'POST') return send(res, 200, project.undo());
+      if (url.pathname === '/api/redo' && req.method === 'POST') return send(res, 200, project.redo());
+
       if (url.pathname === '/api/events' && req.method === 'GET') {
         res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', Connection: 'keep-alive' });
         res.write(': connecté\n\n');

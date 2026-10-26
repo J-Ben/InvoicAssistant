@@ -62,7 +62,12 @@ export type RuntimeMessage =
   | { source: 'rn-canvas'; type: 'ready'; story: string }
   | { source: 'rn-canvas'; type: 'tree'; story: string; tree: LayerNode[] }
   | { source: 'rn-canvas'; type: 'select'; story: string; selection: SelectionInfo }
-  | { source: 'rn-canvas'; type: 'error'; story: string; message: string };
+  | { source: 'rn-canvas'; type: 'error'; story: string; message: string }
+  /** Glisser-déposer sur l'écran : déplacer un élément, ou déposer le composant glissé depuis l'éditeur. */
+  | { source: 'rn-canvas'; type: 'drop'; story: string; kind: 'move' | 'component'; from: { loc: Loc; name: string } | null; target: { loc: Loc; name: string }; position: InsertPosition }
+  | { source: 'rn-canvas'; type: 'snapshot'; story: string; requestId: number; storage: Record<string, string> }
+  /** Raccourci clavier tapé pendant que le focus est dans l'écran (relayé à l'éditeur). */
+  | { source: 'rn-canvas'; type: 'key'; story: string; key: string; metaKey: boolean; ctrlKey: boolean; shiftKey: boolean; altKey: boolean };
 
 export type CanvasMode = 'inspect' | 'interact';
 
@@ -74,7 +79,9 @@ export type EditorMessage =
   | { source: 'rn-canvas-editor'; type: 'mode'; mode: CanvasMode }
   /** `name` : nom attendu ; tant que l'écran affiche autre chose à cet emplacement (Fast Refresh en cours), la sélection attend. */
   | { source: 'rn-canvas-editor'; type: 'select'; loc: Loc | null; name?: string }
-  | { source: 'rn-canvas-editor'; type: 'hover'; loc: Loc | null };
+  | { source: 'rn-canvas-editor'; type: 'hover'; loc: Loc | null }
+  /** Demande le contenu du stockage de l'écran (pour l'enregistrer comme variante). */
+  | { source: 'rn-canvas-editor'; type: 'snapshot'; requestId: number };
 
 /** Liste des stories, calculée par le serveur à partir des fichiers `*.canvas.tsx`. */
 export interface StoryEntry {
@@ -95,12 +102,23 @@ export interface StoryGroup {
 
 export type ValueKind = 'string' | 'number' | 'boolean' | 'null' | 'expression';
 
+/** D'où vient un nom utilisé dans une expression (`colors` → useTheme(), `color` → prop…). */
+export interface ValueOrigin {
+  name: string;
+  kind: 'prop' | 'hook' | 'import' | 'module' | 'local' | 'param' | 'unknown';
+  /** Explication lisible : « useTheme() », « import de '../theme' », « prop de AppText »… */
+  detail: string;
+  line: number | null;
+}
+
 export interface SourceValue {
   kind: ValueKind;
   /** Valeur littérale si `kind` n'est pas `expression`. */
   value?: string | number | boolean | null;
   /** Code source de l'expression (toujours présent). */
   code: string;
+  /** Pour une expression : l'origine de chaque nom qu'elle utilise. */
+  origins?: ValueOrigin[];
 }
 
 export interface StyleSource {
@@ -112,6 +130,8 @@ export interface StyleSource {
   usages: number;
   conditional: boolean;
   properties: { key: string; value: SourceValue }[];
+  /** Pour une source `unknown` : l'origine des noms de son expression. */
+  origins?: ValueOrigin[];
 }
 
 export interface InspectResult {
@@ -140,7 +160,9 @@ export type EditRequest =
   | { op: 'remove'; loc: Loc; name: string }
   | { op: 'duplicate'; loc: Loc; name: string }
   | { op: 'move'; loc: Loc; name: string; target: Loc; targetName: string; position: InsertPosition }
-  | { op: 'insert'; loc: Loc; name: string; position: InsertPosition; component: { name: string; file: string | null } };
+  | { op: 'insert'; loc: Loc; name: string; position: InsertPosition; component: { name: string; file: string | null } }
+  /** Ajoute une variante à un fichier canvas, à partir d'une variante existante et d'un stockage capturé. */
+  | { op: 'addStory'; file: string; base: string; exportName: string; storage: Record<string, string> };
 
 /** Où placer un élément par rapport à la cible : frère avant/après, ou dernier enfant. */
 export type InsertPosition = 'before' | 'after' | 'inside';
@@ -154,9 +176,16 @@ export interface ComponentEntry {
   props: { name: string; type: 'string' | 'number' | 'boolean' | 'function' | 'array' | 'unknown' }[];
 }
 
+export interface HistoryState {
+  /** Libellé de la prochaine modification annulable / rétablissable. */
+  undo: string | null;
+  redo: string | null;
+}
+
 export interface EditResult {
   ok: true;
   file: string;
+  history: HistoryState;
   /** Emplacement de l'élément édité, déplacé ou créé (null s'il a été supprimé). */
   loc: Loc | null;
 }
@@ -169,6 +198,8 @@ export interface ThemeToken {
 export interface ThemeInfo {
   file: string;
   exportName: string;
+  /** Nom sous lequel les composants accèdent au thème, s'il diffère de l'export (ex. `colors`). */
+  alias: string | null;
   tokens: ThemeToken[];
 }
 
