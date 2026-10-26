@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { CanvasMode, EditorMessage, Payload, EditRequest, HistoryState, InspectResult, LayerNode, ProjectInfo, RuntimeMessage, SelectionInfo } from '../shared/protocol.ts';
 import { api } from './api.ts';
 import { Canvas, DEVICES, type Device, type LoadState } from './Canvas.tsx';
+import { useEditorTab } from './tab.ts';
 import { Inspector } from './Inspector.tsx';
 import { Sidebar, takeDraggedComponent } from './Sidebar.tsx';
 
@@ -13,6 +14,9 @@ const THEME_LABEL: Record<ThemePref, string> = { system: '◐ Système', light: 
  * redirection…). Long : plusieurs écrans qui ouvrent leur base en parallèle peuvent mettre 30 s.
  */
 const LOAD_GRACE = 60000;
+/** Base de l'écran encore tenue par une page qui se ferme (rechargement, autre onglet) : on réessaie. */
+const STORAGE_BUSY = /createSyncAccessHandle|Access Handles? cannot be created|NoModificationAllowedError/i;
+const BUSY_RETRIES = 5;
 const STRUCTURAL = new Set<EditRequest['op']>(['remove', 'duplicate', 'move', 'insert']);
 
 function readThemePref(): ThemePref {
@@ -47,6 +51,15 @@ export function App() {
   const [themePref, setThemePref] = useState<ThemePref>(readThemePref);
   const [history, setHistory] = useState<HistoryState>({ undo: null, redo: null });
   const frames = useRef(new Map<string, HTMLIFrameElement>());
+  const busyRetries = useRef(new Map<string, number>());
+  const tab = useEditorTab();
+  // Écrans (re)montés quand cet onglet prend la main : on repart d'un état de chargement propre.
+  useEffect(() => {
+    if (tab.state !== 'owner') return;
+    setLoaded({});
+    setStoryErrors({});
+    busyRetries.current.clear();
+  }, [tab.state]);
   const modeRef = useRef(mode);
   modeRef.current = mode;
 
@@ -114,17 +127,30 @@ export function App() {
           break;
         case 'tree':
           setTrees((t) => ({ ...t, [data.story]: data.tree }));
-          if (data.tree.length > 0) markLoaded(data.story, 'shown');
+          if (data.tree.length > 0) {
+            markLoaded(data.story, 'shown');
+            busyRetries.current.delete(data.story);
+          }
           break;
         case 'select':
           setActiveStory(data.story);
           for (const id of frames.current.keys()) if (id !== data.story) send(id, { type: 'select', loc: null });
           inspect(data.story, data.selection);
           break;
-        case 'error':
+        case 'error': {
+          const attempt = (busyRetries.current.get(data.story) ?? 0) + 1;
+          if (STORAGE_BUSY.test(data.message) && attempt <= BUSY_RETRIES) {
+            busyRetries.current.set(data.story, attempt);
+            window.setTimeout(() => {
+              const frame = frames.current.get(data.story);
+              if (frame) frame.src = frame.src;
+            }, 1000 * attempt);
+            break;
+          }
           setStoryErrors((e) => ({ ...e, [data.story]: data.message }));
           markLoaded(data.story, 'shown');
           break;
+        }
         case 'snapshot':
           snapshots.current.get(data.requestId)?.(data.storage);
           snapshots.current.delete(data.requestId);
@@ -376,18 +402,36 @@ export function App() {
         onSaveVariant={saveVariant}
       />
 
-      <Canvas
-        appUrl={project.appUrl}
-        isolateStories={project.isolateStories}
-        stories={visible}
-        device={device}
-        activeStory={activeStory}
-        errors={storyErrors}
-        loaded={loaded}
-        frames={frames.current}
-        onActivate={setActiveStory}
-        empty={stories.length === 0}
-      />
+      {tab.state !== 'owner' ? (
+        <main className="canvas">
+          <div className="canvas-empty">
+            {tab.state === 'checking' ? (
+              <p>Ouverture des écrans…</p>
+            ) : (
+              <>
+                <h2>L'éditeur est ouvert dans un autre onglet</h2>
+                <p>Un seul onglet à la fois peut afficher les écrans : ils partagent les mêmes bases de données.</p>
+                <button className="primary-button" onClick={tab.takeOver}>
+                  Utiliser cet onglet
+                </button>
+              </>
+            )}
+          </div>
+        </main>
+      ) : (
+        <Canvas
+          appUrl={project.appUrl}
+          isolateStories={project.isolateStories}
+          stories={visible}
+          device={device}
+          activeStory={activeStory}
+          errors={storyErrors}
+          loaded={loaded}
+          frames={frames.current}
+          onActivate={setActiveStory}
+          empty={stories.length === 0}
+        />
+      )}
 
       <Inspector
         selection={selection}

@@ -152,6 +152,8 @@ textarea { resize: vertical; }
 .frame-empty { position: absolute; left: 12px; right: 12px; bottom: 12px; padding: 10px; border-radius: 8px; background: var(--panel); border: 1px solid var(--border); color: var(--muted); font-size: 12px; }
 .frame-error { position: absolute; left: 12px; right: 12px; bottom: 12px; padding: 10px; border-radius: 8px; background: var(--error-soft); color: var(--error); font-size: 12px; }
 .canvas-empty { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; color: var(--muted); cursor: default; }
+.primary-button { margin-top: 8px; padding: 8px 16px; border: 0; border-radius: 8px; background: var(--accent); color: #fff; font-weight: 600; cursor: pointer; }
+.primary-button:hover { filter: brightness(1.08); }
 .canvas-empty pre { background: var(--panel); padding: 12px 16px; border-radius: 8px; border: 1px solid var(--border); color: var(--text); }
 
 .zoom-controls { position: absolute; right: 12px; bottom: 12px; display: flex; background: var(--panel); border: 1px solid var(--border); border-radius: 8px; overflow: hidden; cursor: default; }
