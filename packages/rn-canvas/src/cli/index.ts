@@ -13,6 +13,8 @@ import { fileURLToPath } from 'node:url';
 import { startServer } from '../server/http.ts';
 import { serveMcp } from '../server/mcp.ts';
 import { CONFIG_FILE, Project } from '../server/project.ts';
+import { diagnose, printChecks } from './doctor.ts';
+import { addBabelPlugin } from './patch.ts';
 
 const EDITOR_DIR = fileURLToPath(new URL('./editor', import.meta.url));
 const ENTRY_IMPORT = "import { withCanvas } from 'rn-canvas/runtime';";
@@ -20,7 +22,7 @@ const ENTRY_IMPORT = "import { withCanvas } from 'rn-canvas/runtime';";
 const [command = 'help', ...args] = process.argv.slice(2);
 const root = process.cwd();
 
-const commands: Record<string, () => Promise<void> | void> = { init, dev, generate, mcp, help };
+const commands: Record<string, () => Promise<void> | void> = { init, dev, generate, mcp, doctor, help };
 await (commands[command] ?? help)();
 
 function flag(name: string): string | true | undefined {
@@ -34,6 +36,12 @@ function log(message: string) {
   console.log(`\x1b[35m[rn-canvas]\x1b[0m ${message}`);
 }
 
+function doctor() {
+  const checks = diagnose(root);
+  printChecks(checks);
+  if (checks.some((c) => c.level === 'error')) process.exitCode = 1;
+}
+
 function help() {
   console.log(`rn-canvas — éditeur visuel aller-retour pour React Native
 
@@ -41,6 +49,7 @@ function help() {
   rn-canvas dev [--port 7007]    Lance l'éditeur ; démarre Expo si l'app ne répond pas
               [--no-app]         … sans démarrer Expo
   rn-canvas generate             Régénère le manifeste des stories
+  rn-canvas doctor               Vérifie le projet : ce qui bloquera le canevas, et comment le corriger
   rn-canvas mcp                  Serveur MCP (stdio) : claude mcp add rn-canvas -- npx rn-canvas mcp`);
 }
 
@@ -82,8 +91,13 @@ async function dev() {
   if (!flag('no-app') && !(await reachable(project.config.appUrl))) {
     const appPort = new URL(project.config.appUrl).port || '8081';
     log(`Démarrage d'Expo sur le port ${appPort}…`);
-    expo = spawn('npx', ['expo', 'start', '--port', appPort], { cwd: root, stdio: ['ignore', 'inherit', 'inherit'], env: process.env, shell: process.platform === 'win32' });
+    // RN_CANVAS=1 : active les remplacements web de withRnCanvas (metro.config.js).
+    expo = spawn('npx', ['expo', 'start', '--port', appPort], { cwd: root, stdio: ['ignore', 'inherit', 'inherit'], env: { ...process.env, RN_CANVAS: '1' }, shell: process.platform === 'win32' });
     expo.on('exit', (code) => log(`Expo s'est arrêté (code ${code}).`));
+  } else if (!flag('no-app')) {
+    const status = await shimStatus(project.config.appUrl);
+    if (status === 'off') log("\x1b[33mExpo tourne déjà, sans les remplacements web de rn-canvas.\x1b[0m Arrêtez-le puis relancez « npm run canvas » (ou démarrez Expo avec RN_CANVAS=1).");
+    if (status === 'missing') log("\x1b[33mmetro.config.js n'utilise pas withRnCanvas : remplacements web désactivés.\x1b[0m Voir « npx rn-canvas doctor ».");
   }
 
   log(`Éditeur prêt : \x1b[1m${server.url}\x1b[0m (app : ${project.config.appUrl})`);
@@ -95,6 +109,18 @@ async function dev() {
   };
   process.on('SIGINT', stop);
   process.on('SIGTERM', stop);
+}
+
+/** Expo tourne-t-il avec les remplacements web (marqueur exposé par withRnCanvas) ? */
+async function shimStatus(appUrl: string): Promise<'on' | 'off' | 'missing'> {
+  try {
+    const res = await fetch(new URL('/__rn-canvas', appUrl), { signal: AbortSignal.timeout(1500) });
+    if (!res.ok) return 'missing';
+    const body = (await res.json()) as { shims?: boolean };
+    return body.shims ? 'on' : 'off';
+  } catch {
+    return 'missing';
+  }
 }
 
 async function reachable(url: string): Promise<boolean> {
@@ -141,7 +167,13 @@ function init() {
     );
     log('babel.config.js créé.');
   } else if (!fs.readFileSync(babelPath, 'utf8').includes('rn-canvas/babel')) {
-    todo.push(`Ajoutez 'rn-canvas/babel' aux plugins de ${path.basename(babelPath)}.`);
+    const patched = addBabelPlugin(fs.readFileSync(babelPath, 'utf8'));
+    if (patched) {
+      fs.writeFileSync(babelPath, patched);
+      log(`Plugin rn-canvas ajouté à ${path.basename(babelPath)}.`);
+    } else {
+      todo.push(`Ajoutez 'rn-canvas/babel' aux plugins de ${path.basename(babelPath)}.`);
+    }
   }
 
   // 3. Point d'entrée
@@ -193,6 +225,23 @@ function init() {
     }
   }
 
+  // 3 bis. Metro : remplacements web des modules natifs
+  const metroPath = ['metro.config.js', 'metro.config.cjs'].map((f) => path.join(root, f)).find((f) => fs.existsSync(f));
+  if (!metroPath) {
+    fs.writeFileSync(
+      path.join(root, 'metro.config.js'),
+      `// withRnCanvas : dans le canevas uniquement, remplace les modules natifs sans version web.
+const { getDefaultConfig } = require('expo/metro-config');
+const { withRnCanvas } = require('rn-canvas/metro');
+
+module.exports = withRnCanvas(getDefaultConfig(__dirname));
+`,
+    );
+    log('metro.config.js créé (remplacements web).');
+  } else if (!fs.readFileSync(metroPath, 'utf8').includes('rn-canvas/metro')) {
+    todo.push(`Dans ${path.basename(metroPath)} : const { withRnCanvas } = require('rn-canvas/metro'); puis module.exports = withRnCanvas(config);`);
+  }
+
   // 4. Script + dépendances web
   pkg.scripts ??= {};
   if (!pkg.scripts.canvas) {
@@ -213,6 +262,7 @@ function init() {
     log('Il reste à faire :');
     for (const t of todo) console.log(`  • ${t}`);
   }
+  log('Vérifiez le projet avec « npx rn-canvas doctor ».');
   log(
     pkg.dependencies?.['expo-router']
       ? 'Créez vos fichiers *.canvas.tsx dans canvas/ (pas dans app/ : ce seraient des routes), puis lancez « npm run canvas ».'
@@ -230,3 +280,4 @@ function findThemeFile(): { file: string; export: string } | null {
   }
   return null;
 }
+

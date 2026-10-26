@@ -9,6 +9,7 @@
   },
   "exports": {
     "./babel": "./babel.cjs",
+    "./metro": "./metro.cjs",
     "./runtime": "./src/runtime/index.ts",
     "./package.json": "./package.json"
   },
@@ -16,6 +17,8 @@
     "bin",
     "dist",
     "babel.cjs",
+    "metro.cjs",
+    "shims",
     "src/runtime",
     "src/shared",
     "README.md",

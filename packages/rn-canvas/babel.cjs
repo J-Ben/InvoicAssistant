@@ -8,6 +8,9 @@
  * Il ne s'active que pour le bundle web de développement (caller Expo `isDev` +
  * `platform === 'web'`) : les bundles natifs et de production ne sont pas touchés.
  * La valeur est une chaîne (primitive) pour ne pas casser `React.memo`.
+ *
+ * Sur ce même bundle, il remplace aussi `import.meta` (interdit dans un script web non-module,
+ * utilisé par exemple par zustand/middleware) par un objet équivalent, y compris dans node_modules.
  */
 const path = require('path');
 
@@ -25,6 +28,22 @@ module.exports = function rnCanvasBabelPlugin(api, options = {}) {
   return {
     name: 'rn-canvas',
     visitor: {
+      MetaProperty(nodePath) {
+        const { meta, property } = nodePath.node;
+        if (meta.name !== 'import' || property.name !== 'meta') return;
+        // import.meta → { url: '', env: { MODE: process.env.NODE_ENV } }
+        nodePath.replaceWith(
+          t.objectExpression([
+            t.objectProperty(t.identifier('url'), t.stringLiteral('')),
+            t.objectProperty(
+              t.identifier('env'),
+              t.objectExpression([
+                t.objectProperty(t.identifier('MODE'), t.memberExpression(t.memberExpression(t.identifier('process'), t.identifier('env')), t.identifier('NODE_ENV'))),
+              ]),
+            ),
+          ]),
+        );
+      },
       JSXOpeningElement(nodePath, state) {
         const filename = state.file.opts.filename;
         if (!filename || filename.includes(`${path.sep}node_modules${path.sep}`)) return;

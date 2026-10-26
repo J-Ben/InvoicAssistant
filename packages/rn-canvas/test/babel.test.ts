@@ -34,3 +34,20 @@ test('ne touche ni au natif, ni à la production, ni à node_modules', () => {
   const lib = transform(SOURCE, { isDev: true, platform: 'web' }, path.join(root, 'node_modules/lib/index.js'));
   assert.ok(!lib.includes('__rnc'));
 });
+
+test('import.meta est remplacé sur le bundle web de développement, y compris dans node_modules', () => {
+  const code = `const mode = import.meta.env ? import.meta.env.MODE : void 0;`;
+  const babelOpts = (caller: Record<string, unknown>, filename: string) => ({
+    filename,
+    babelrc: false,
+    configFile: false,
+    sourceType: 'module' as const,
+    caller: { name: 'test', ...caller },
+    plugins: [plugin],
+  });
+  const web = babel.transformSync(code, babelOpts({ isDev: true, platform: 'web' }, path.join(root, 'node_modules/zustand/esm/middleware.mjs'))).code as string;
+  assert.ok(!web.includes('import.meta'), web);
+  assert.ok(web.includes('process.env.NODE_ENV'));
+  const ios = babel.transformSync(code, babelOpts({ isDev: true, platform: 'ios' }, path.join(root, 'src/a.js'))).code as string;
+  assert.ok(ios.includes('import.meta'));
+});
