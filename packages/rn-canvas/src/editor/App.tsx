@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { CanvasMode, EditorMessage, Payload, EditRequest, HistoryState, InspectResult, LayerNode, ProjectInfo, RuntimeMessage, SelectionInfo } from '../shared/protocol.ts';
+import type { CanvasMode, EditorMessage, EditRequest, FlowLink, HistoryState, InspectResult, LayerNode, Payload, ProjectInfo, Rect, RuntimeMessage, SelectionInfo } from '../shared/protocol.ts';
 import { api } from './api.ts';
 import { Canvas, DEVICES, type Device, type LoadState } from './Canvas.tsx';
 import { useEditorTab } from './tab.ts';
@@ -87,6 +87,10 @@ export function App() {
     setStoryErrors({});
     busyRetries.current.clear();
   }, [tab.state]);
+  // Mode Flux : liens de navigation lus dans le code et position de leurs boutons dans chaque écran.
+  const [showFlows, setShowFlows] = useState(false);
+  const [flows, setFlows] = useState<FlowLink[]>([]);
+  const [flowRects, setFlowRects] = useState<Record<string, Record<string, Rect>>>({});
   const modeRef = useRef(mode);
   modeRef.current = mode;
 
@@ -125,6 +129,22 @@ export function App() {
   }, []);
 
   const showError = (text: string) => setToast({ kind: 'error', text });
+
+  // Liens relus à l'activation, et après chaque modification du code ou de la liste des écrans.
+  useEffect(() => {
+    if (!showFlows) return;
+    api.flows().then(setFlows, (e: Error) => setToast({ kind: 'error', text: e.message }));
+  }, [showFlows, project, history]);
+
+  // Les boutons bougent (défilement, chargement des données) : position redemandée régulièrement.
+  useEffect(() => {
+    if (!showFlows) return;
+    const locs = [...new Set(flows.map((link) => link.loc).filter((loc): loc is string => loc !== null))];
+    const measure = () => send(null, { type: 'measure', requestId: 0, locs });
+    measure();
+    const timer = window.setInterval(measure, 1500);
+    return () => window.clearInterval(timer);
+  }, [showFlows, flows, send]);
 
   // Chaque analyse porte un numéro : une réponse arrivée après une plus récente (ou après une édition) est ignorée.
   const inspectSeq = useRef(0);
@@ -189,6 +209,9 @@ export function App() {
         }
         case 'navigate':
           setToast({ kind: 'ok', text: `Navigation ignorée dans le canevas : ${data.action}(${data.href ?? ''})` });
+          break;
+        case 'measured':
+          setFlowRects((all) => (JSON.stringify(all[data.story]) === JSON.stringify(data.rects) ? all : { ...all, [data.story]: data.rects }));
           break;
         case 'snapshot':
           snapshots.current.get(data.requestId)?.(data.storage);
@@ -393,6 +416,11 @@ export function App() {
             Interaction
           </button>
         </div>
+        <div className="segmented" role="group" aria-label="Affichage">
+          <button className={showFlows ? 'on' : ''} aria-pressed={showFlows} onClick={() => setShowFlows((v) => !v)} title="Afficher les liens de navigation entre écrans">
+            ⇢ Flux
+          </button>
+        </div>
         <div className="history" role="group" aria-label="Historique">
           <button disabled={!history.undo} onClick={() => travel('undo')} title={history.undo ? `Annuler ${history.undo} (⌘Z)` : 'Rien à annuler'}>
             ↶
@@ -467,6 +495,7 @@ export function App() {
           errors={storyErrors}
           loaded={loaded}
           generations={generations}
+          flows={showFlows ? { links: flows, rects: flowRects } : null}
           frames={frames.current}
           onActivate={setActiveStory}
           empty={stories.length === 0}

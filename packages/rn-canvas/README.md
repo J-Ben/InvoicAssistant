@@ -108,6 +108,9 @@ Ouvrez **http://localhost:7007**.
 - **Structure** : boutons Dupliquer et Supprimer de l'inspecteur, ou raccourcis ⌘/Ctrl+D et Suppr. **Glissez un élément directement sur l'écran** (ou dans l'onglet Calques) pour le déplacer : en haut de la cible pour le placer avant, en bas pour après, au milieu pour le mettre dedans. Un repère vert montre l'emplacement, rouge si le déplacement est impossible (autre fichier, dans lui-même).
 - **Composants** : l'onglet liste les composants exportés par le projet et quelques primitives React Native. Un clic insère le composant dans l'élément sélectionné (s'il s'agit d'un conteneur) ou juste après ; on peut aussi le **glisser sur l'écran** ou vers les calques. L'import est ajouté, et les props obligatoires (lues dans l'interface `NomProps`) reçoivent des valeurs d'exemple.
 - **Thème de l'éditeur** : le bouton Système / Clair / Sombre de la barre du haut. Le choix est mémorisé dans le navigateur.
+- **Flux** (projets expo-router) : le bouton ⇢ Flux dessine les liens de navigation lus dans le code (`router.push/replace/navigate`, `<Link href>`), du bouton exact vers l'écran visé. Survolez un écran pour mettre ses liens en avant. La légende compte les liens vers des écrans absents du canevas et les boutons non affichés dans l'état actuel (liste vide…). Une cible calculée (`router.push(route)`) n'est pas lisible dans le code et n'apparaît pas.
+- **Navigation** : un écran du canevas reste affiché seul. Une redirection ou un `router.push` y est ignoré et signalé par une notification.
+- **Un seul onglet** : les écrans partagent leurs bases de données d'un onglet à l'autre ; un deuxième onglet de l'éditeur propose « Utiliser cet onglet ». Avec Brave, si les écrans affichent des erreurs de stockage, désactivez les Shields pour `localhost`.
 
 ## Piloter les écrans depuis une IA (MCP)
 
@@ -140,6 +143,8 @@ Si l'éditeur est ouvert en même temps, il affiche les modifications de l'IA en
 
 `theme.alias` (optionnel) : nom sous lequel les composants accèdent au thème, s'il diffère de l'export. Par exemple `"export": "LIGHT_COLORS", "alias": "colors"` quand les composants écrivent `const { colors } = useTheme()` : le sélecteur de jetons propose alors `colors.primary`.
 
+`routerRoot` (détecté : `app` ou `src/app` quand le projet dépend d'expo-router) : dossier des routes, utilisé par le mode Flux pour relier une cible (`/invoice/123`) à son écran (`app/invoice/[id].tsx`), puis au fichier canvas qui l'importe. `null` le désactive.
+
 `isolateStories` (activé par défaut si l'app tourne sur `localhost`) : chaque écran est servi depuis son propre sous-domaine (`accueil-actuel-1k2j.localhost:8081`), que les navigateurs résolvent vers la machine locale. Chaque écran a ainsi son propre stockage (localStorage, IndexedDB, OPFS) : pas de conflit entre écrans affichés en parallèle, ce qui est indispensable pour expo-sqlite sur le web, dont la base ne s'ouvre que dans un seul onglet à la fois.
 
 ## Fonctionnement
@@ -156,6 +161,7 @@ Le serveur n'écoute que sur `127.0.0.1` et refuse les requêtes d'autres origin
 ## Limites actuelles
 
 - Les valeurs dynamiques (`{user.name}`, styles calculés) s'affichent en lecture seule.
+- Un écran est affiché sans ses layouts (barre d'onglets, en-tête de pile) : ajoutez-les au besoin par un `wrapper` dans le fichier canvas.
 - Les modifications de structure ne concernent que les enfants directs d'un élément JSX. Un élément affiché sous condition (`{cond && <X />}`), dans une liste (`.map`) ou à la racine d'un composant se modifie dans le code.
 - Les déplacements se font dans un même fichier. Pour sortir un élément d'un composant, il faut passer par le code.
 - Seuls les modules qui fonctionnent sur le web peuvent s'afficher. Les autres (notifications, système de fichiers, widgets…) doivent être neutralisés sur le web : `Platform.OS === 'web'`, fichier `.web.ts`, ou simulation dans `setup` ou dans le wrapper.

@@ -3,10 +3,11 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
-import type { ComponentEntry, EditRequest, EditResult, HistoryState, InspectResult, ProjectInfo, StoryGroup, ThemeInfo, ThemeToken } from '../shared/protocol.ts';
+import type { ComponentEntry, EditRequest, FlowLink, EditResult, HistoryState, InspectResult, ProjectInfo, StoryGroup, ThemeInfo, ThemeToken } from '../shared/protocol.ts';
 import { parseLoc } from '../shared/protocol.ts';
 import { type AstNode, type Patch, type SourceFile, applyPatches, findProperty, jsxName, moduleDeclarators, parse, programOf, propertyKey, unwrap, walk } from './ast.ts';
 import { setProp, setStyle, setText, setToken, themeObject } from './edit.ts';
+import { matchRoute, navigationLinks, relativeImports, resolveImport, routesOf } from './flows.ts';
 import { SourceError, findElement, inspectElement, locOfIndex, meaningfulChildren, normalizeJsxText, sourceValue } from './inspect.ts';
 import { PRIMITIVES, componentsOf } from './library.ts';
 import { type Insertion, componentJsx, duplicateElement, ensureImport, finalOffset, insertion, moveElement, removeElement } from './structure.ts';
@@ -32,6 +33,8 @@ export interface CanvasConfig {
   runtimeConfig: string;
   /** Fichier généré qui référence toutes les stories pour le bundler. */
   manifest: string;
+  /** Dossier des routes expo-router (`app`), pour le mode Flux ; null sans expo-router. */
+  routerRoot: string | null;
 }
 
 export interface ElementOutline {
@@ -100,7 +103,7 @@ export class Project {
   }
 
   /** Fichiers des dossiers `include` dont le nom satisfait `accept`, triés. */
-  sourceFiles(accept: (name: string) => boolean): string[] {
+  sourceFiles(accept: (name: string) => boolean, dirs: string[] = this.config.include): string[] {
     const out: string[] = [];
     const visit = (dir: string) => {
       let entries: fs.Dirent[];
@@ -117,8 +120,8 @@ export class Project {
         }
       }
     };
-    for (const dir of this.config.include) visit(path.resolve(this.root, dir));
-    return out.sort();
+    for (const dir of dirs) visit(path.resolve(this.root, dir));
+    return [...new Set(out)].sort();
   }
 
   stories(): StoryGroup[] {
@@ -174,6 +177,51 @@ export default manifest;
     if (previous === content) return false;
     fs.writeFileSync(target, content);
     return true;
+  }
+
+  // ---- Flux (liens de navigation) ----
+
+  flows(): FlowLink[] {
+    const routerRoot = this.config.routerRoot;
+    if (!routerRoot) return [];
+    const routes = routesOf(this.root, routerRoot);
+    const groups = this.stories();
+
+    // Écran affiché par chaque fichier canvas : la route qu'il importe.
+    const routeFiles = new Set(routes.map((r) => r.file));
+    const storiesByScreen = new Map<string, string[]>();
+    for (const group of groups) {
+      try {
+        const src = parse(fs.readFileSync(this.resolve(group.file), 'utf8'), group.file);
+        const screen = relativeImports(src)
+          .map((source) => resolveImport(this.root, group.file, source))
+          .find((file) => file && routeFiles.has(file));
+        if (screen) storiesByScreen.set(screen, [...(storiesByScreen.get(screen) ?? []), ...group.stories.map((s) => s.id)]);
+      } catch {
+        // Fichier canvas illisible : signalé ailleurs (liste des écrans).
+      }
+    }
+
+    const code = this.sourceFiles((name) => /\.(tsx|jsx|ts|js)$/.test(name) && !CANVAS_FILE.test(name) && !/\.(test|spec|d)\./.test(name), [...this.config.include, routerRoot]);
+    const links: FlowLink[] = [];
+    for (const file of code) {
+      let src;
+      try {
+        src = parse(fs.readFileSync(this.resolve(file), 'utf8'), file);
+      } catch {
+        continue;
+      }
+      for (const link of navigationLinks(src, file)) {
+        const route = matchRoute(link.href, routes);
+        links.push({
+          ...link,
+          route: route?.file ?? null,
+          targets: route ? storiesByScreen.get(route.file) ?? [] : [],
+          sources: link.loc ? [] : storiesByScreen.get(file) ?? [],
+        });
+      }
+    }
+    return links;
   }
 
   // ---- Thème ----
@@ -456,7 +504,15 @@ export function loadConfig(root: string): CanvasConfig {
     theme: raw.theme,
     runtimeConfig: raw.runtimeConfig ?? 'rn-canvas.config.tsx',
     manifest: raw.manifest ?? 'rn-canvas.stories.ts',
+    routerRoot: raw.routerRoot !== undefined ? raw.routerRoot : detectRouterRoot(root),
   };
+}
+
+/** `app` (ou `src/app`) quand le projet utilise expo-router. */
+function detectRouterRoot(root: string): string | null {
+  const pkg = readJson(path.join(root, 'package.json')) as { dependencies?: Record<string, string> } | null;
+  if (!pkg?.dependencies?.['expo-router']) return null;
+  return ['app', 'src/app'].find((dir) => fs.existsSync(path.join(root, dir))) ?? null;
 }
 
 function readJson(file: string): unknown {

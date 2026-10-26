@@ -68,6 +68,7 @@ export type RuntimeMessage =
   /** Glisser-déposer sur l'écran : déplacer un élément, ou déposer le composant glissé depuis l'éditeur. */
   | { source: 'rn-canvas'; type: 'drop'; story: string; kind: 'move' | 'component'; from: { loc: Loc; name: string } | null; target: { loc: Loc; name: string }; position: InsertPosition }
   | { source: 'rn-canvas'; type: 'snapshot'; story: string; requestId: number; storage: Record<string, string> }
+  | { source: 'rn-canvas'; type: 'measured'; story: string; requestId: number; rects: Record<Loc, Rect>; viewport: { width: number; height: number } }
   /** Raccourci clavier tapé pendant que le focus est dans l'écran (relayé à l'éditeur). */
   | { source: 'rn-canvas'; type: 'key'; story: string; key: string; metaKey: boolean; ctrlKey: boolean; shiftKey: boolean; altKey: boolean };
 
@@ -83,7 +84,30 @@ export type EditorMessage =
   | { source: 'rn-canvas-editor'; type: 'select'; loc: Loc | null; name?: string }
   | { source: 'rn-canvas-editor'; type: 'hover'; loc: Loc | null }
   /** Demande le contenu du stockage de l'écran (pour l'enregistrer comme variante). */
-  | { source: 'rn-canvas-editor'; type: 'snapshot'; requestId: number };
+  | { source: 'rn-canvas-editor'; type: 'snapshot'; requestId: number }
+  /** Position des éléments donnés (mode Flux) : réponse `measured`, éléments visibles seulement. */
+  | { source: 'rn-canvas-editor'; type: 'measure'; requestId: number; locs: Loc[] };
+
+/** Lien de navigation lu dans le code (mode Flux). */
+export interface FlowLink {
+  /** Fichier où se trouve l'appel. */
+  file: string;
+  /** Élément déclencheur (bouton, lien…) ; null : navigation de l'écran lui-même (effet, redirection). */
+  loc: Loc | null;
+  name: string | null;
+  /** Texte de l'élément, pour l'affichage. */
+  label?: string;
+  /** `push`, `replace`, `navigate`, `link`, `redirect`… */
+  action: string;
+  /** Cible telle qu'écrite (`/invoice/:param` pour un gabarit). */
+  href: string;
+  /** Écran de destination (fichier de route), s'il est trouvé. */
+  route: string | null;
+  /** Stories qui affichent l'écran de destination. */
+  targets: string[];
+  /** Pour `loc` null : stories qui affichent l'écran d'où part la navigation. */
+  sources: string[];
+}
 
 /** Liste des stories, calculée par le serveur à partir des fichiers `*.canvas.tsx`. */
 export interface StoryEntry {

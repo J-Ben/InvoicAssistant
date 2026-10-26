@@ -358,6 +358,26 @@ export function startInspector(storyId: string): InspectorHandle {
     else pending = { loc, name };
   };
 
+  // Mode Flux : position du premier exemplaire visible de chaque élément demandé.
+  const measure = (locs: Set<string>): Record<string, Rect> => {
+    const r = root();
+    const rects: Record<string, Rect> = {};
+    if (!r || locs.size === 0) return rects;
+    const visit = (fiber: Fiber, parentTag: string | null) => {
+      for (let child = fiber.child; child; child = child.sibling) {
+        const tag = tagOf(child);
+        const loc = tag && tag !== parentTag ? parseTag(tag)?.loc : undefined;
+        if (loc && locs.has(loc) && !rects[loc]) {
+          const rect = unionRect(hostNodes(child));
+          if (rect && rect.y + rect.height > 0 && rect.y < window.innerHeight) rects[loc] = rect;
+        }
+        visit(child, tag ?? parentTag);
+      }
+    };
+    visit(r, null);
+    return rects;
+  };
+
   const sendTree = () => {
     const r = root();
     if (!r) return;
@@ -506,6 +526,8 @@ export function startInspector(storyId: string): InspectorHandle {
         // Stockage indisponible : variante sans données.
       }
       post({ type: 'snapshot', requestId: data.requestId, storage });
+    } else if (data.type === 'measure') {
+      post({ type: 'measured', requestId: data.requestId, rects: measure(new Set(data.locs)), viewport: { width: window.innerWidth, height: window.innerHeight } });
     } else if (data.type === 'hover') {
       hovered = data.loc;
       draw();

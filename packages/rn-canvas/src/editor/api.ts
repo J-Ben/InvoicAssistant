@@ -1,4 +1,4 @@
-import type { EditRequest, EditResult, HistoryState, InspectResult, ProjectInfo } from '../shared/protocol.ts';
+import type { EditRequest, EditResult, FlowLink, HistoryState, InspectResult, ProjectInfo } from '../shared/protocol.ts';
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
   const res = await fetch(url, init);
@@ -23,6 +23,7 @@ export const api = {
   edit: (body: EditRequest) =>
     request<EditResult>('/api/edit', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }),
   history: () => request<HistoryState>('/api/history'),
+  flows: () => request<FlowLink[]>('/api/flows'),
   undo: () => request<EditResult>('/api/undo', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' }),
   redo: () => request<EditResult>('/api/redo', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' }),
   events(onEvent: (type: string) => void): () => void {

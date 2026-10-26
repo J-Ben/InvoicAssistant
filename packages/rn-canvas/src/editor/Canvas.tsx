@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { StoryEntry } from '../shared/protocol.ts';
+import { type FlowData, FlowLayer, FlowLegend, layoutFlows } from './Flows.tsx';
 import { storyUrl } from './urls.ts';
 
 /** `shown` : l'écran a affiché quelque chose ; `empty` : prêt mais toujours vide après un long délai. */
@@ -36,13 +37,15 @@ interface Props {
   loaded: Record<string, LoadState>;
   /** Stockage de rechange par écran (voir `storyUrl`). */
   generations: Record<string, number>;
+  /** Mode Flux : liens de navigation à dessiner ; null quand il est désactivé. */
+  flows: FlowData | null;
   frames: Map<string, HTMLIFrameElement>;
   onActivate: (id: string) => void;
   empty: boolean;
 }
 
 /** Canevas infini : déplacement (glisser le fond, molette), zoom (Ctrl/⌘ + molette, boutons). */
-export function Canvas({ appUrl, isolateStories, stories, device, activeStory, errors, loaded, generations, frames, onActivate, empty }: Props) {
+export function Canvas({ appUrl, isolateStories, stories, device, activeStory, errors, loaded, generations, flows, frames, onActivate, empty }: Props) {
   const viewport = useRef<HTMLDivElement>(null);
   const [view, setView] = useState({ x: PADDING, y: PADDING, zoom: 0.75 });
   const [panning, setPanning] = useState(false);
@@ -55,6 +58,17 @@ export function Canvas({ appUrl, isolateStories, stories, device, activeStory, e
   const contentWidth = columns * cellWidth - GAP;
   const contentHeight = rows * cellHeight - GAP;
   const pending = stories.filter((s) => !loaded[s.id]).length;
+
+  const [hovered, setHovered] = useState<string | null>(null);
+  const flowLayout = useMemo(() => {
+    if (!flows) return null;
+    const index = new Map(stories.map((s, i) => [s.id, i]));
+    return layoutFlows(flows, (id) => {
+      const i = index.get(id);
+      if (i === undefined) return null;
+      return { x: (i % columns) * cellWidth, y: Math.floor(i / columns) * cellHeight + LABEL, width: device.width, height: device.height };
+    });
+  }, [flows, stories, columns, cellWidth, cellHeight, device]);
 
   const fit = useCallback(() => {
     const el = viewport.current;
@@ -131,6 +145,8 @@ export const Default = { props: {} };`}</pre>
             key={story.id}
             className={`artboard ${activeStory === story.id ? 'active' : ''}`}
             style={{ left: (i % columns) * cellWidth, top: Math.floor(i / columns) * cellHeight, width: device.width }}
+            onMouseEnter={() => setHovered(story.id)}
+            onMouseLeave={() => setHovered((h) => (h === story.id ? null : h))}
           >
             <button className="artboard-label" onClick={() => onActivate(story.id)} title={story.id}>
               {story.file.split('/').pop()!.replace(/\.canvas\.\w+$/, '')} · {story.title}
@@ -159,6 +175,7 @@ export const Default = { props: {} };`}</pre>
             </div>
           </section>
         ))}
+        {flowLayout && <FlowLayer layout={flowLayout} width={contentWidth} height={contentHeight + LABEL} zoom={view.zoom} focus={hovered} />}
       </div>
       {pending > 0 && (
         <div className="canvas-progress" role="status">
@@ -166,6 +183,7 @@ export const Default = { props: {} };`}</pre>
           Chargement des écrans · {stories.length - pending}/{stories.length}
         </div>
       )}
+      {flowLayout && <FlowLegend layout={flowLayout} />}
       <div className="zoom-controls">
         <button onClick={() => zoomAt(1 / 1.2, ...center())} aria-label="Dézoomer">−</button>
         <button onClick={fit} title="Tout afficher">{Math.round(view.zoom * 100)} %</button>

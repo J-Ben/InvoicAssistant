@@ -144,6 +144,15 @@ textarea { resize: vertical; }
 .frame { position: relative; background: #fff; border-radius: 18px; overflow: hidden; box-shadow: 0 2px 4px rgb(0 0 0 / 0.06), 0 12px 32px rgb(0 0 0 / 0.1); outline: 2px solid transparent; }
 .artboard.active .frame { outline-color: var(--accent); }
 .frame iframe { display: block; border: 0; background: #fff; }
+.flows { position: absolute; left: 0; top: 0; overflow: visible; pointer-events: none; z-index: 2; }
+.flow { opacity: 0.55; }
+.flow path, .flow rect { fill: none; stroke: var(--accent); }
+.flows marker path { fill: var(--accent); }
+.flow text { fill: var(--accent); font-weight: 600; paint-order: stroke; stroke: var(--bg); stroke-width: 4px; }
+.flow.strong { opacity: 1; }
+.flow.faded { opacity: 0.08; }
+.flow-legend { position: absolute; left: 12px; bottom: 12px; max-width: min(560px, calc(100% - 200px)); padding: 8px 12px; border-radius: 10px; background: var(--panel); border: 1px solid var(--border); color: var(--muted); font-size: 12px; line-height: 1.5; box-shadow: 0 4px 12px rgb(0 0 0 / 0.12); }
+.flow-legend strong { color: var(--text); }
 .frame-loading { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px; background: var(--panel); color: var(--muted); font-size: 15px; }
 .frame-loading .spinner { width: 28px; height: 28px; border-width: 3px; }
 .spinner { display: inline-block; width: 14px; height: 14px; border: 2px solid var(--border); border-top-color: var(--accent); border-radius: 50%; animation: rnc-spin 0.8s linear infinite; flex: none; }

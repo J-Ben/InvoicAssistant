@@ -61,6 +61,7 @@ export function startServer(project: Project, options: ServerOptions): Promise<C
         return send(res, 200, project.edit(body));
       }
 
+      if (url.pathname === '/api/flows' && req.method === 'GET') return send(res, 200, project.flows());
       if (url.pathname === '/api/history' && req.method === 'GET') return send(res, 200, project.history());
       if (url.pathname === '/api/undo' && req.method === 'POST') return send(res, 200, project.undo());
       if (url.pathname === '/api/redo' && req.method === 'POST') return send(res, 200, project.redo());
