@@ -25,11 +25,26 @@ const PADDING = 60;
 const LABEL = 28;
 /** Les écrans sont rangés en grille plutôt qu'en une seule ligne interminable. */
 const COLUMNS = 4;
+const VIEW_KEY = 'rn-canvas:view';
+
+type View = { x: number; y: number; zoom: number };
+
+function readView(): View | null {
+  try {
+    const view = JSON.parse(localStorage.getItem(VIEW_KEY) ?? 'null');
+    return view && [view.x, view.y, view.zoom].every(Number.isFinite) ? view : null;
+  } catch {
+    return null;
+  }
+}
 
 interface Props {
   appUrl: string;
   isolateStories: boolean;
+  /** Écrans affichés (cochés), dans l'ordre de la grille. */
   stories: StoryEntry[];
+  /** Tous les écrans : un écran décoché reste chargé mais masqué, pour réapparaître sans délai. */
+  allStories: StoryEntry[];
   device: Device;
   activeStory: string | null;
   errors: Record<string, string>;
@@ -45,9 +60,11 @@ interface Props {
 }
 
 /** Canevas infini : déplacement (glisser le fond, molette), zoom (Ctrl/⌘ + molette, boutons). */
-export function Canvas({ appUrl, isolateStories, stories, device, activeStory, errors, loaded, generations, flows, frames, onActivate, empty }: Props) {
+export function Canvas({ appUrl, isolateStories, stories, allStories, device, activeStory, errors, loaded, generations, flows, frames, onActivate, empty }: Props) {
   const viewport = useRef<HTMLDivElement>(null);
-  const [view, setView] = useState({ x: PADDING, y: PADDING, zoom: 0.75 });
+  // Vue mémorisée : ni un rechargement ni l'ajout / le masquage d'un écran ne la réinitialisent.
+  const [view, setView] = useState<View>(() => readView() ?? { x: PADDING, y: PADDING, zoom: 0.75 });
+  const autoFitted = useRef(readView() !== null);
   const [panning, setPanning] = useState(false);
   const drag = useRef<{ x: number; y: number; vx: number; vy: number } | null>(null);
 
@@ -58,6 +75,7 @@ export function Canvas({ appUrl, isolateStories, stories, device, activeStory, e
   const contentWidth = columns * cellWidth - GAP;
   const contentHeight = rows * cellHeight - GAP;
   const pending = stories.filter((s) => !loaded[s.id]).length;
+  const gridIndex = useMemo(() => new Map(stories.map((s, i) => [s.id, i])), [stories]);
 
   const [hovered, setHovered] = useState<string | null>(null);
   const flowLayout = useMemo(() => {
@@ -78,7 +96,23 @@ export function Canvas({ appUrl, isolateStories, stories, device, activeStory, e
     setView({ zoom, x: (width - contentWidth * zoom) / 2, y: Math.max(PADDING / 2, (height - contentHeight * zoom) / 2) });
   }, [stories.length, contentWidth, contentHeight]);
 
-  useLayoutEffect(fit, [fit]);
+  // Cadrage automatique une seule fois, à la toute première ouverture.
+  useLayoutEffect(() => {
+    if (autoFitted.current || stories.length === 0) return;
+    autoFitted.current = true;
+    fit();
+  }, [fit, stories.length]);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      try {
+        localStorage.setItem(VIEW_KEY, JSON.stringify(view));
+      } catch {
+        // Stockage indisponible : la vue n'est simplement pas mémorisée.
+      }
+    }, 300);
+    return () => window.clearTimeout(timer);
+  }, [view]);
 
   const zoomAt = useCallback((factor: number, cx: number, cy: number) => {
     setView((v) => {
@@ -140,41 +174,44 @@ export const Default = { props: {} };`}</pre>
         </div>
       )}
       <div className="world" style={{ transform: `translate(${view.x}px, ${view.y}px) scale(${view.zoom})` }}>
-        {stories.map((story, i) => (
-          <section
-            key={story.id}
-            className={`artboard ${activeStory === story.id ? 'active' : ''}`}
-            style={{ left: (i % columns) * cellWidth, top: Math.floor(i / columns) * cellHeight, width: device.width }}
-            onMouseEnter={() => setHovered(story.id)}
-            onMouseLeave={() => setHovered((h) => (h === story.id ? null : h))}
-          >
-            <button className="artboard-label" onClick={() => onActivate(story.id)} title={story.id}>
-              {story.file.split('/').pop()!.replace(/\.canvas\.\w+$/, '')} · {story.title}
-            </button>
-            <div className="frame" style={{ width: device.width, height: device.height }}>
-              <iframe
-                title={story.id}
-                src={storyUrl(appUrl, story, isolateStories, generations[story.id])}
-                width={device.width}
-                height={device.height}
-                ref={(el) => {
-                  if (el) frames.set(story.id, el);
-                  else frames.delete(story.id);
-                }}
-              />
-              {!loaded[story.id] && (
-                <div className="frame-loading" role="status">
-                  <span className="spinner" />
-                  Chargement de l'écran…
-                </div>
-              )}
-              {loaded[story.id] === 'empty' && !errors[story.id] && (
-                <div className="frame-empty">Rien d'affiché : données vides ou redirection ? Ouvrez-le en mode Interaction.</div>
-              )}
-              {errors[story.id] && <div className="frame-error">{errors[story.id]}</div>}
-            </div>
-          </section>
-        ))}
+        {allStories.map((story) => {
+          const i = gridIndex.get(story.id);
+          return (
+            <section
+              key={story.id}
+              className={`artboard ${activeStory === story.id ? 'active' : ''}`}
+              style={i === undefined ? { display: 'none', width: device.width } : { left: (i % columns) * cellWidth, top: Math.floor(i / columns) * cellHeight, width: device.width }}
+              onMouseEnter={() => setHovered(story.id)}
+              onMouseLeave={() => setHovered((h) => (h === story.id ? null : h))}
+            >
+              <button className="artboard-label" onClick={() => onActivate(story.id)} title={story.id}>
+                {story.file.split('/').pop()!.replace(/\.canvas\.\w+$/, '')} · {story.title}
+              </button>
+              <div className="frame" style={{ width: device.width, height: device.height }}>
+                <iframe
+                  title={story.id}
+                  src={storyUrl(appUrl, story, isolateStories, generations[story.id])}
+                  width={device.width}
+                  height={device.height}
+                  ref={(el) => {
+                    if (el) frames.set(story.id, el);
+                    else frames.delete(story.id);
+                  }}
+                />
+                {!loaded[story.id] && (
+                  <div className="frame-loading" role="status">
+                    <span className="spinner" />
+                    Chargement de l'écran…
+                  </div>
+                )}
+                {loaded[story.id] === 'empty' && !errors[story.id] && (
+                  <div className="frame-empty">Rien d'affiché : données vides ou redirection ? Ouvrez-le en mode Interaction.</div>
+                )}
+                {errors[story.id] && <div className="frame-error">{errors[story.id]}</div>}
+              </div>
+            </section>
+          );
+        })}
         {flowLayout && <FlowLayer layout={flowLayout} width={contentWidth} height={contentHeight + LABEL} zoom={view.zoom} focus={hovered} />}
       </div>
       {pending > 0 && (

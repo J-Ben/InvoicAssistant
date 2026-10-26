@@ -490,6 +490,7 @@ export function App() {
           appUrl={project.appUrl}
           isolateStories={project.isolateStories}
           stories={visible}
+          allStories={stories}
           device={device}
           activeStory={activeStory}
           errors={storyErrors}
