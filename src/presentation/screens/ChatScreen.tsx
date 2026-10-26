@@ -115,7 +115,7 @@ export const ChatScreen: React.FC = () => {
                     renderItem={({ item }) => <MessageBubble message={item} />}
                     contentContainerStyle={styles.list}
                     ListFooterComponent={
-                        isGenerating ? <SkeletonBubble /> : null
+                        isGenerating ? <SkeletonBubble /> : undefined
                     }
                     keyboardDismissMode="interactive"
                 />
