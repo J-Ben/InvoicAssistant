@@ -117,6 +117,8 @@ function init() {
   if (!fs.existsSync(configPath)) {
     const theme = findThemeFile();
     const config: Record<string, unknown> = { appUrl: 'http://localhost:8081' };
+    // Avec expo-router, tout fichier de app/ devient une route : les stories vont dans canvas/.
+    if (pkg.dependencies?.['expo-router']) config.include = ['src', 'canvas'];
     if (theme) config.theme = theme;
     fs.writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`);
     log(`${CONFIG_FILE} créé${theme ? ` (thème : ${theme.file})` : ''}.`);
@@ -143,24 +145,52 @@ function init() {
   }
 
   // 3. Point d'entrée
-  const entry = [pkg.main, 'index.ts', 'index.tsx', 'index.js'].filter(Boolean).map((f: string) => path.join(root, f)).find((f) => fs.existsSync(f));
-  const entryCode = entry ? fs.readFileSync(entry, 'utf8') : '';
-  if (entry && !entryCode.includes('rn-canvas/runtime') && /registerRootComponent\(App\);/.test(entryCode)) {
-    const manifest = `./${new Project(root).config.manifest.replace(/\.tsx?$/, '')}`;
-    const patched = entryCode
-      .replace(/(import \{ registerRootComponent \} from 'expo';\n)/, `$1${ENTRY_IMPORT}\n`)
-      .replace(
-        'registerRootComponent(App);',
-        `// En développement web, rn-canvas peut afficher un écran isolé (?rnc-story=…) à la place de l'app.\nregisterRootComponent(__DEV__ ? withCanvas(App, () => require('${manifest}').default) : App);`,
-      );
-    if (patched.includes(ENTRY_IMPORT)) {
-      fs.writeFileSync(entry, patched);
-      log(`${path.basename(entry)} branché.`);
+  const usesRouter = Boolean(pkg.dependencies?.['expo-router']);
+  const layoutFile = ['app/_layout.tsx', 'app/_layout.jsx', 'app/_layout.js', 'src/app/_layout.tsx'].map((f) => path.join(root, f)).find((f) => fs.existsSync(f));
+  const manifestOf = (from: string) => {
+    let rel = path.relative(path.dirname(from), path.resolve(root, new Project(root).config.manifest)).split(path.sep).join('/').replace(/\.tsx?$/, '');
+    if (!rel.startsWith('.')) rel = `./${rel}`;
+    return rel;
+  };
+
+  if (usesRouter && layoutFile) {
+    // expo-router : on enveloppe la mise en page racine (app/_layout.tsx).
+    const code = fs.readFileSync(layoutFile, 'utf8');
+    const match = /export default function (\w+)\(/.exec(code);
+    if (code.includes('rn-canvas/runtime')) {
+      // Déjà branché.
+    } else if (match) {
+      const name = match[1];
+      const lastImport = [...code.matchAll(/^import [^;]+;$/gms)].pop();
+      const at = lastImport ? lastImport.index! + lastImport[0].length : 0;
+      const patched =
+        `${code.slice(0, at)}\n${ENTRY_IMPORT}${code.slice(at)}`.replace(match[0], `function ${name}(`) +
+        `\n// En développement web, rn-canvas peut afficher un écran isolé (?rnc-story=…) à la place de l'app.\n` +
+        `export default __DEV__ ? withCanvas(${name}, () => require('${manifestOf(layoutFile)}').default) : ${name};\n`;
+      fs.writeFileSync(layoutFile, patched);
+      log(`${path.relative(root, layoutFile)} branché (expo-router).`);
     } else {
-      todo.push(`Dans ${path.basename(entry)} : enveloppez App avec withCanvas (voir README de rn-canvas).`);
+      todo.push(`Dans ${path.relative(root, layoutFile)} : enveloppez la mise en page racine avec withCanvas (voir README de rn-canvas).`);
     }
-  } else if (!entryCode.includes('rn-canvas/runtime')) {
-    todo.push("Dans votre point d'entrée : enveloppez App avec withCanvas (voir README de rn-canvas).");
+  } else {
+    const entry = [pkg.main, 'index.ts', 'index.tsx', 'index.js'].filter(Boolean).map((f: string) => path.join(root, f)).find((f) => fs.existsSync(f));
+    const entryCode = entry ? fs.readFileSync(entry, 'utf8') : '';
+    if (entry && !entryCode.includes('rn-canvas/runtime') && /registerRootComponent\(App\);/.test(entryCode)) {
+      const patched = entryCode
+        .replace(/(import \{ registerRootComponent \} from 'expo';\n)/, `$1${ENTRY_IMPORT}\n`)
+        .replace(
+          'registerRootComponent(App);',
+          `// En développement web, rn-canvas peut afficher un écran isolé (?rnc-story=…) à la place de l'app.\nregisterRootComponent(__DEV__ ? withCanvas(App, () => require('${manifestOf(entry)}').default) : App);`,
+        );
+      if (patched.includes(ENTRY_IMPORT)) {
+        fs.writeFileSync(entry, patched);
+        log(`${path.basename(entry)} branché.`);
+      } else {
+        todo.push(`Dans ${path.basename(entry)} : enveloppez App avec withCanvas (voir README de rn-canvas).`);
+      }
+    } else if (!entryCode.includes('rn-canvas/runtime')) {
+      todo.push("Dans votre point d'entrée : enveloppez App avec withCanvas (voir README de rn-canvas).");
+    }
   }
 
   // 4. Script + dépendances web
@@ -183,11 +213,15 @@ function init() {
     log('Il reste à faire :');
     for (const t of todo) console.log(`  • ${t}`);
   }
-  log('Créez un fichier *.canvas.tsx à côté d’un écran, puis lancez « npm run canvas ».');
+  log(
+    pkg.dependencies?.['expo-router']
+      ? 'Créez vos fichiers *.canvas.tsx dans canvas/ (pas dans app/ : ce seraient des routes), puis lancez « npm run canvas ».'
+      : 'Créez un fichier *.canvas.tsx à côté d’un écran, puis lancez « npm run canvas ».',
+  );
 }
 
 function findThemeFile(): { file: string; export: string } | null {
-  const candidates = ['src/theme/colors.ts', 'src/presentation/theme/colors.ts', 'src/theme/index.ts', 'theme/colors.ts', 'constants/Colors.ts'];
+  const candidates = ['src/theme/colors.ts', 'src/shared/theme/colors.ts', 'src/presentation/theme/colors.ts', 'src/theme/index.ts', 'theme/colors.ts', 'constants/Colors.ts'];
   for (const file of candidates) {
     const abs = path.join(root, file);
     if (!fs.existsSync(abs)) continue;

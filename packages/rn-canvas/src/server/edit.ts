@@ -57,15 +57,22 @@ function setObjectKey(src: SourceFile, object: AstNode, key: string, value: Edit
   const entry = `${keyCode(src, key)}: ${code}`;
   if (props.length === 0) return [{ start: object.start, end: object.end, text: `{ ${entry} }` }];
 
-  const last = props[props.length - 1];
-  const tail = src.code.slice(last.end, object.end - 1);
+  return [appendAfter(src, object, props[props.length - 1], entry)];
+}
+
+/**
+ * Ajoute `text` après le dernier élément `last` d'un objet ou d'un tableau littéral, en suivant
+ * sa mise en forme : une ligne par élément si la liste est multi-ligne, virgule finale conservée.
+ */
+function appendAfter(src: SourceFile, list: AstNode, last: AstNode, text: string): Patch {
+  const tail = src.code.slice(last.end, list.end - 1);
   const comma = tail.indexOf(',');
-  const multiline = last.loc.start.line !== object.loc.start.line;
+  const multiline = last.loc.start.line !== list.loc.start.line;
   if (multiline) {
     const indent = indentAt(src.code, last.start);
-    return comma === -1 ? [insert(last.end, `,\n${indent}${entry}`)] : [insert(last.end + comma + 1, `\n${indent}${entry},`)];
+    return comma === -1 ? insert(last.end, `,\n${indent}${text}`) : insert(last.end + comma + 1, `\n${indent}${text},`);
   }
-  return comma === -1 ? [insert(last.end, `, ${entry}`)] : [insert(last.end + comma + 1, ` ${entry}`)];
+  return comma === -1 ? insert(last.end, `, ${text}`) : insert(last.end + comma + 1, ` ${text}`);
 }
 
 /** Retire un attribut JSX avec l'espace qui le précède. */
@@ -122,7 +129,8 @@ export function setStyle(src: SourceFile, element: AstNode, key: string, value: 
       return [{ start: elements[elements.length - 2].end, end: last.end, text: '' }];
     }
     if (value.kind === 'remove') return [];
-    return last ? [insert(last.end, `, ${newObject()}`)] : [{ start: expr.start, end: expr.end, text: `[${newObject()}]` }];
+    if (!last) return [{ start: expr.start, end: expr.end, text: `[${newObject()}]` }];
+    return [appendAfter(src, expr, last, newObject())];
   }
 
   // Référence (styles.card, props.style…) : on surcharge sans toucher à l'original.

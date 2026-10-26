@@ -20,6 +20,8 @@ npx rn-canvas init
 
 `init` crée `rn-canvas.json`, ajoute le plugin à `babel.config.js`, branche le point d'entrée et ajoute le script `npm run canvas`. Il liste ce qu'il reste à faire, s'il y a lieu.
 
+Avec **expo-router**, `init` branche `app/_layout.tsx` (la mise en page racine) au lieu du point d'entrée, et range les stories dans `canvas/` : dans `app/`, chaque fichier deviendrait une route.
+
 Branchement manuel du point d'entrée, si `init` ne peut pas le faire :
 
 ```ts
@@ -76,7 +78,7 @@ npm run canvas        # = rn-canvas dev : démarre Expo si besoin, puis l'édite
 
 Ouvrez **http://localhost:7007**.
 
-- **Sélection (V)** : un clic sur un élément ouvre l'inspecteur (texte, props, styles).
+- **Sélection (V)** : un clic sur un élément ouvre l'inspecteur (texte, props, styles). Comme dans Figma, un clic à l'intérieur d'un composant sélectionne **l'instance** du composant (ses props, son style à cet endroit) ; **Alt+clic** sélectionne l'élément exact dans le code du composant (le modifier touche alors toutes ses instances).
 - **Interaction (I)** : l'app réagit normalement (boutons, saisie…).
 - Le **fil d'Ariane** permet de remonter du `Text` interne d'un composant à son instance dans l'écran. On modifie alors soit le composant (toutes ses instances), soit seulement les props de cette instance, comme les composants principaux et les instances de Figma.
 - **Styles** : choisissez la cible. Un style partagé de `StyleSheet.create` touche tous les éléments qui l'utilisent ; « Cet élément uniquement » ajoute une surcharge (`[styles.x, { … }]`).
@@ -110,9 +112,12 @@ Si l'éditeur est ouvert en même temps, il affiche les modifications de l'IA en
 {
   "appUrl": "http://localhost:8081",
   "include": ["src"],
-  "theme": { "file": "src/theme/colors.ts", "export": "colors" }
+  "theme": { "file": "src/theme/colors.ts", "export": "colors" },
+  "isolateStories": true
 }
 ```
+
+`isolateStories` (activé par défaut si l'app tourne sur `localhost`) : chaque écran est servi depuis son propre sous-domaine (`accueil-actuel-1k2j.localhost:8081`), que les navigateurs résolvent vers la machine locale. Chaque écran a ainsi son propre stockage (localStorage, IndexedDB, OPFS) : pas de conflit entre écrans affichés en parallèle, ce qui est indispensable pour expo-sqlite sur le web, dont la base ne s'ouvre que dans un seul onglet à la fois.
 
 ## Fonctionnement
 
@@ -130,7 +135,7 @@ Le serveur n'écoute que sur `127.0.0.1` et refuse les requêtes d'autres origin
 - Les valeurs dynamiques (`{user.name}`, styles calculés) s'affichent en lecture seule.
 - Les modifications de structure ne concernent que les enfants directs d'un élément JSX. Un élément affiché sous condition (`{cond && <X />}`), dans une liste (`.map`) ou à la racine d'un composant se modifie dans le code.
 - Les déplacements se font dans un même fichier. Pour sortir un élément d'un composant, il faut passer par le code.
-- Seuls les modules qui fonctionnent sur le web peuvent s'afficher ; les autres doivent être simulés dans `setup` ou dans le wrapper.
+- Seuls les modules qui fonctionnent sur le web peuvent s'afficher. Les autres (notifications, système de fichiers, widgets…) doivent être neutralisés sur le web : `Platform.OS === 'web'`, fichier `.web.ts`, ou simulation dans `setup` ou dans le wrapper.
 
 ## Publication
 

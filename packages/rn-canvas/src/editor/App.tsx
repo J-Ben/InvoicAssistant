@@ -271,6 +271,7 @@ export function App() {
 
       <Canvas
         appUrl={project.appUrl}
+        isolateStories={project.isolateStories}
         stories={visible}
         device={device}
         activeStory={activeStory}

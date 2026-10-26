@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { StoryEntry } from '../shared/protocol.ts';
+import { storyUrl } from './urls.ts';
 
 export interface Device {
   id: string;
@@ -21,6 +22,7 @@ const LABEL = 28;
 
 interface Props {
   appUrl: string;
+  isolateStories: boolean;
   stories: StoryEntry[];
   device: Device;
   activeStory: string | null;
@@ -31,7 +33,7 @@ interface Props {
 }
 
 /** Canevas infini : déplacement (glisser le fond, molette), zoom (Ctrl/⌘ + molette, boutons). */
-export function Canvas({ appUrl, stories, device, activeStory, errors, frames, onActivate, empty }: Props) {
+export function Canvas({ appUrl, isolateStories, stories, device, activeStory, errors, frames, onActivate, empty }: Props) {
   const viewport = useRef<HTMLDivElement>(null);
   const [view, setView] = useState({ x: PADDING, y: PADDING, zoom: 0.75 });
   const [panning, setPanning] = useState(false);
@@ -122,7 +124,7 @@ export const Default = { props: {} };`}</pre>
             <div className="frame" style={{ width: device.width, height: device.height }}>
               <iframe
                 title={story.id}
-                src={`${appUrl}/?rnc-story=${encodeURIComponent(story.id)}`}
+                src={storyUrl(appUrl, story, isolateStories)}
                 width={device.width}
                 height={device.height}
                 ref={(el) => {

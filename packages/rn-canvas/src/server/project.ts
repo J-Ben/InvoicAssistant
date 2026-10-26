@@ -14,6 +14,12 @@ import { type Insertion, componentJsx, duplicateElement, ensureImport, finalOffs
 export interface CanvasConfig {
   /** URL de l'app en version web (serveur de dev Expo). */
   appUrl: string;
+  /**
+   * Sert chaque écran depuis son propre sous-domaine (`accueil-x1y2.localhost`) : chacun a ainsi
+   * son stockage (localStorage, IndexedDB, OPFS…), sans conflit entre écrans affichés en parallèle.
+   * Activé par défaut quand l'app tourne sur localhost.
+   */
+  isolateStories: boolean;
   /** Dossiers où chercher les fichiers `*.canvas.tsx`. */
   include: string[];
   /** Objet de thème exporté dont les valeurs deviennent des jetons. */
@@ -64,6 +70,7 @@ export class Project {
       name: pkg?.name ?? path.basename(this.root),
       root: this.root,
       appUrl: this.config.appUrl,
+      isolateStories: this.config.isolateStories,
       theme: this.theme(),
       stories: this.stories(),
       components: this.components(),
@@ -319,8 +326,10 @@ export default manifest;
 
 export function loadConfig(root: string): CanvasConfig {
   const raw = (readJson(path.join(root, CONFIG_FILE)) ?? {}) as Partial<CanvasConfig>;
+  const appUrl = raw.appUrl ?? 'http://localhost:8081';
   return {
-    appUrl: raw.appUrl ?? 'http://localhost:8081',
+    appUrl,
+    isolateStories: raw.isolateStories ?? new URL(appUrl).hostname === 'localhost',
     include: raw.include ?? ['src', 'app', 'components'].filter((d) => fs.existsSync(path.join(root, d))),
     theme: raw.theme,
     runtimeConfig: raw.runtimeConfig ?? 'rn-canvas.config.tsx',

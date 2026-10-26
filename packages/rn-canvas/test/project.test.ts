@@ -206,3 +206,12 @@ test('stories : découverte et manifeste', () => {
   assert.ok(manifest.includes(`"src/screens/Card.canvas.tsx": () => require("./src/screens/Card.canvas.tsx")`));
   assert.ok(manifest.includes('config: undefined'));
 });
+
+test('surcharge dans un tableau de styles multi-ligne : une ligne à part, virgule finale respectée', () => {
+  const { project } = fixture();
+  const file = 'src/screens/Multi.tsx';
+  const code = `export const A = ({ style }) => (\n  <Text\n    style={[\n      base,\n      style,\n    ]}\n  />\n);\n`;
+  fs.writeFileSync(path.join(project.root, file), code);
+  project.edit({ op: 'setStyle', loc: `${file}:2:2`, name: 'Text', key: 'fontSize', value: { kind: 'literal', value: 22 }, target: { kind: 'instance' } });
+  assert.equal(fs.readFileSync(path.join(project.root, file), 'utf8'), code.replace('      style,\n', '      style,\n      { fontSize: 22 },\n'));
+});

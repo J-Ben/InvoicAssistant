@@ -132,6 +132,20 @@ function ancestorsOf(fiber: Fiber, root: Fiber): { loc: string; name: string }[]
   return out;
 }
 
+/**
+ * Si l'élément est défini dans un autre fichier que l'instruction qui l'englobe (il fait partie
+ * du code interne d'un composant), remonte jusqu'à l'instance de ce composant.
+ */
+function instanceBoundary(fiber: Fiber, root: Fiber): Fiber {
+  const fileOf = (f: Fiber) => parseTag(tagOf(f)!)?.file;
+  const startFile = fileOf(fiber);
+  for (let current = fiber.return; current && current !== root && current.type !== StoryRoot; current = current.return) {
+    if (!tagOf(current)) continue;
+    return fileOf(current) === startFile ? fiber : current;
+  }
+  return fiber;
+}
+
 function isInside(fiber: Fiber, root: Fiber): boolean {
   for (let current: Fiber | null = fiber; current; current = current.return) {
     if (current === root || current.type === StoryRoot) return true;
@@ -256,8 +270,11 @@ export function startInspector(storyId: string): InspectorHandle {
     event.preventDefault();
     event.stopPropagation();
     if (event.type === 'click') {
-      const fiber = fiberAtEvent(event);
+      let fiber = fiberAtEvent(event);
       const r = root();
+      // Comme dans Figma : un clic à l'intérieur d'un composant sélectionne son instance ;
+      // Alt+clic sélectionne l'élément exact, dans le code du composant.
+      if (fiber && r && !(event as MouseEvent).altKey) fiber = instanceBoundary(fiber, r);
       if (fiber && r) {
         const info = selectionInfo(fiber, r);
         if (info) {

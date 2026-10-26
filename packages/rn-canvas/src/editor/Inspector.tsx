@@ -60,7 +60,11 @@ export function Inspector({ selection, theme, root, onSelectAncestor, onEdit }: 
           <p className="hint">
             Cliquez sur un élément d'un écran pour l'inspecter.
             <br />
-            <span className="small">V : sélection · I : interaction · Échap : désélectionner</span>
+            <span className="small">
+              Un clic sélectionne l'instance d'un composant, Alt+clic l'élément exact à l'intérieur.
+              <br />
+              V : sélection · I : interaction · Échap : désélectionner
+            </span>
           </p>
         </div>
       </aside>
@@ -100,7 +104,7 @@ export function Inspector({ selection, theme, root, onSelectAncestor, onEdit }: 
         {screenFile && file !== screenFile && (
           <p className="notice">
             Élément défini dans <b>{file.split('/').pop()}</b> : le modifier ici change <b>toutes les instances</b> de ce composant.
-            Sélectionnez son instance dans le fil d'Ariane pour ne changer que ses props.
+            Pour ne changer que cet endroit, sélectionnez l'instance dans le fil d'Ariane (ou cliquez sans Alt).
           </p>
         )}
 

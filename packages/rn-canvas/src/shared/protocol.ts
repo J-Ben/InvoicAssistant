@@ -176,6 +176,8 @@ export interface ProjectInfo {
   name: string;
   root: string;
   appUrl: string;
+  /** Chaque écran est servi depuis son propre sous-domaine de localhost (stockage isolé). */
+  isolateStories: boolean;
   theme: ThemeInfo | null;
   stories: StoryGroup[];
   components: ComponentEntry[];
