@@ -106,7 +106,7 @@ test('setStyle accepte un jeton en portée et refuse le reste', () => {
   assert.ok(read().includes('backgroundColor: colors.primary'));
   assert.throws(
     () => project.edit({ op: 'setStyle', loc: VIEW, name: 'View', key: 'color', value: { kind: 'expression', code: 'theme.x' }, target: { kind: 'instance' } }),
-    /n'est pas importé/,
+    /n'est pas accessible/,
   );
   assert.throws(
     () => project.edit({ op: 'setStyle', loc: VIEW, name: 'View', key: 'color', value: { kind: 'expression', code: 'alert(1)' }, target: { kind: 'instance' } }),
@@ -214,4 +214,21 @@ test('surcharge dans un tableau de styles multi-ligne : une ligne à part, virgu
   fs.writeFileSync(path.join(project.root, file), code);
   project.edit({ op: 'setStyle', loc: `${file}:2:2`, name: 'Text', key: 'fontSize', value: { kind: 'literal', value: 22 }, target: { kind: 'instance' } });
   assert.equal(fs.readFileSync(path.join(project.root, file), 'utf8'), code.replace('      style,\n', '      style,\n      { fontSize: 22 },\n'));
+});
+
+test('jetons locaux au composant : acceptés sur l’élément, refusés (avec explication) dans StyleSheet.create', () => {
+  const { project } = fixture();
+  const file = 'src/screens/Themed.tsx';
+  const code = `import { useTheme } from '../theme';\nexport const A = () => {\n  const { colors, spacing } = useTheme();\n  return <View style={styles.box} />;\n};\nconst styles = StyleSheet.create({ box: { gap: 1 } });\n`;
+  fs.writeFileSync(path.join(project.root, file), code);
+  const loc = `${file}:4:9`;
+  assert.ok(project.inspect(loc, 'View').scope.includes('spacing'));
+  project.edit({ op: 'setStyle', loc, name: 'View', key: 'gap', value: { kind: 'expression', code: 'spacing.md' }, target: { kind: 'instance' } });
+  assert.ok(fs.readFileSync(path.join(project.root, file), 'utf8').includes('style={[styles.box, { gap: spacing.md }]}'));
+  assert.throws(
+    () => project.edit({ op: 'setStyle', loc, name: 'View', key: 'gap', value: { kind: 'expression', code: 'colors.bg' }, target: { kind: 'stylesheet', ref: 'styles.box' } }),
+    /n'existe que dans le composant/,
+  );
+  project.edit({ op: 'setProp', loc, name: 'View', prop: 'tint', value: { kind: 'expression', code: 'colors.bg' } });
+  assert.ok(fs.readFileSync(path.join(project.root, file), 'utf8').includes('tint={colors.bg}'));
 });

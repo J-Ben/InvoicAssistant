@@ -128,6 +128,60 @@ export function moduleScope(ast: AstNode): string[] {
   return [...names].sort();
 }
 
+const FUNCTIONS = new Set(['FunctionDeclaration', 'FunctionExpression', 'ArrowFunctionExpression', 'ObjectMethod', 'ClassMethod']);
+
+/** Noms liés par un motif (`x`, `{ a, b: c }`, `[d, ...e]`, `f = 1`). */
+function patternNames(pattern: AstNode | null | undefined, out: Set<string>): void {
+  if (!pattern) return;
+  switch (pattern.type) {
+    case 'Identifier':
+      out.add(pattern.name);
+      break;
+    case 'ObjectPattern':
+      for (const p of pattern.properties) patternNames(p.type === 'RestElement' ? p.argument : p.value, out);
+      break;
+    case 'ArrayPattern':
+      for (const e of pattern.elements) patternNames(e, out);
+      break;
+    case 'AssignmentPattern':
+      patternNames(pattern.left, out);
+      break;
+    case 'RestElement':
+      patternNames(pattern.argument, out);
+      break;
+    case 'TSParameterProperty':
+      patternNames(pattern.parameter, out);
+      break;
+  }
+}
+
+/**
+ * Noms accessibles à l'endroit de `node` : ceux du module, plus les paramètres et variables des
+ * fonctions et blocs qui l'entourent (ex. `const { colors, spacing } = useTheme()`).
+ */
+export function scopeAt(ast: AstNode, node: AstNode): string[] {
+  const names = new Set(moduleScope(ast));
+  let chain: AstNode[] = [];
+  walk(ast, (n, parents) => {
+    if (chain.length) return false;
+    if (n === node) {
+      chain = parents;
+      return false;
+    }
+    if (n.start > node.start || n.end < node.end) return false;
+  });
+  for (const parent of chain) {
+    if (FUNCTIONS.has(parent.type)) for (const param of parent.params) patternNames(param, names);
+    if (parent.type === 'BlockStatement') {
+      for (const stmt of parent.body) {
+        if (stmt.type === 'VariableDeclaration') for (const d of stmt.declarations) patternNames(d.id, names);
+        if ((stmt.type === 'FunctionDeclaration' || stmt.type === 'ClassDeclaration') && stmt.id) names.add(stmt.id.name);
+      }
+    }
+  }
+  return [...names].sort();
+}
+
 /** Retire les enveloppes TypeScript (`as const`, `satisfies`, `!`, parenthèses). */
 export function unwrap(node: AstNode): AstNode {
   let current = node;

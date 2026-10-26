@@ -139,7 +139,7 @@ function Details({ inspect, computed, theme, onEdit }: { inspect: InspectResult;
   const targetSource = sources.find((s) => (target.kind === 'instance' ? s.kind === 'inline' && s === sources[sources.length - 1] : s.ref === target.ref));
   const inTarget = new Set(targetSource?.properties.map((p) => p.key));
 
-  const setStyle = (key: string, raw: string) => onEdit({ op: 'setStyle', loc, name, key, value: parseInput(raw, inspect.scope), target });
+  const setStyle = (key: string, raw: string) => onEdit({ op: 'setStyle', loc, name, key, value: parseInput(raw, inspect.scope, { style: true }), target });
   const removeStyle = (key: string) => onEdit({ op: 'setStyle', loc, name, key, value: { kind: 'remove' }, target });
 
   const extraKeys = [...merged.keys()].filter((k) => !GROUPED.has(k));

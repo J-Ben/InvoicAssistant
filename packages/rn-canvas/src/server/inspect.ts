@@ -2,7 +2,7 @@
  * Analyse statique d'un élément JSX : texte, props et styles, avec l'origine de chaque valeur.
  */
 import type { InspectResult, SourceValue, StyleSource } from '../shared/protocol.ts';
-import { type AstNode, type SourceFile, codeOf, findProperty, jsxElements, jsxName, memberPath, moduleDeclarators, moduleScope, propertyKey, unwrap, walk } from './ast.ts';
+import { type AstNode, type SourceFile, codeOf, findProperty, jsxElements, jsxName, memberPath, moduleDeclarators, propertyKey, scopeAt, unwrap, walk } from './ast.ts';
 
 export class SourceError extends Error {
   readonly status: number;
@@ -173,7 +173,7 @@ export function inspectElement(src: SourceFile, file: string, element: AstNode):
       editable: !styleAttr || Boolean(styleExpr),
       code: styleExpr ? codeOf(src, styleExpr) : null,
     },
-    scope: moduleScope(src.ast),
+    scope: scopeAt(src.ast, element),
   };
 }
 

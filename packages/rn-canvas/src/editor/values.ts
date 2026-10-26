@@ -2,13 +2,17 @@ import type { EditValue, SourceValue } from '../shared/protocol.ts';
 
 const MEMBER_PATH = /^[A-Za-z_$][\w$]*(\.[A-Za-z_$][\w$]*)+$/;
 
-/** Ce que l'utilisateur tape → valeur d'édition. `colors.primary` devient un jeton s'il est en portée. */
-export function parseInput(raw: string, scope: string[]): EditValue {
+/**
+ * Ce que l'utilisateur tape → valeur d'édition. `colors.primary` devient un jeton s'il est en portée.
+ * Pour un style (`style: true`), `xxx.yyy` est toujours traité comme un jeton : une chaîne avec un
+ * point n'y a pas de sens, et le serveur expliquera si le jeton n'est pas accessible.
+ */
+export function parseInput(raw: string, scope: string[], { style = false } = {}): EditValue {
   const text = raw.trim();
   if (text === '') return { kind: 'remove' };
   if (/^-?\d+(\.\d+)?$/.test(text)) return { kind: 'literal', value: Number(text) };
   if (text === 'true' || text === 'false') return { kind: 'literal', value: text === 'true' };
-  if (MEMBER_PATH.test(text) && scope.includes(text.split('.')[0])) return { kind: 'expression', code: text };
+  if (MEMBER_PATH.test(text) && (style || scope.includes(text.split('.')[0]))) return { kind: 'expression', code: text };
   const quoted = /^(['"])(.*)\1$/.exec(text);
   return { kind: 'literal', value: quoted ? quoted[2] : text };
 }

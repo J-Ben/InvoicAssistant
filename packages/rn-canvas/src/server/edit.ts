@@ -3,20 +3,20 @@
  * qui touchent le plus petit morceau de code possible, en respectant le style du fichier.
  */
 import type { EditValue, StyleTarget } from '../shared/protocol.ts';
-import { type AstNode, type Patch, type SourceFile, codeOf, findProperty, indentAt, jsxName, moduleDeclarators, moduleScope, quoteJs, unwrap } from './ast.ts';
+import { type AstNode, type Patch, type SourceFile, codeOf, findProperty, indentAt, jsxName, moduleDeclarators, moduleScope, quoteJs, scopeAt, unwrap } from './ast.ts';
 import { SourceError, meaningfulChildren, styleAttribute, stylesheetEntry } from './inspect.ts';
 
 const IDENTIFIER = /^[A-Za-z_$][\w$]*$/;
 const MEMBER_PATH = /^[A-Za-z_$][\w$]*(\.[A-Za-z_$][\w$]*)*$/;
 
 /** Code d'une valeur. Les expressions sont limitées aux jetons (`colors.primary`) déjà en portée. */
-export function valueCode(src: SourceFile, value: EditValue): string {
+export function valueCode(src: SourceFile, value: EditValue, scope: string[] = moduleScope(src.ast)): string {
   if (value.kind === 'remove') throw new SourceError('Valeur manquante.');
   if (value.kind === 'expression') {
     const code = value.code.trim();
     if (!MEMBER_PATH.test(code)) throw new SourceError(`Expression non autorisée : « ${code} ». Seuls les jetons (ex. colors.primary) sont acceptés.`);
     const root = code.split('.')[0];
-    if (!moduleScope(src.ast).includes(root)) throw new SourceError(`« ${root} » n'est pas importé dans ce fichier.`);
+    if (!scope.includes(root)) throw new SourceError(`« ${root} » n'est pas accessible à cet endroit du fichier.`);
     return code;
   }
   const v = value.value;
@@ -35,7 +35,7 @@ function insert(at: number, text: string): Patch {
 }
 
 /** Affecte (ou retire) `key` dans un objet littéral existant. */
-function setObjectKey(src: SourceFile, object: AstNode, key: string, value: EditValue): Patch[] {
+function setObjectKey(src: SourceFile, object: AstNode, key: string, value: EditValue, scope?: string[]): Patch[] {
   const props: AstNode[] = object.properties;
   const existing = findProperty(object, key);
 
@@ -47,7 +47,7 @@ function setObjectKey(src: SourceFile, object: AstNode, key: string, value: Edit
     return [{ start: object.start, end: object.end, text: '{}' }];
   }
 
-  const code = valueCode(src, value);
+  const code = valueCode(src, value, scope);
   if (existing) {
     const target = existing.shorthand ? existing : existing.value;
     const text = existing.shorthand ? `${keyCode(src, key)}: ${code}` : code;
@@ -100,12 +100,21 @@ export function setStyle(src: SourceFile, element: AstNode, key: string, value: 
   if (target.kind === 'stylesheet') {
     const entry = stylesheetEntry(src.ast, target.ref);
     if (!entry) throw new SourceError(`Style « ${target.ref} » introuvable dans ce fichier.`);
+    // StyleSheet.create est au niveau du module : les variables d'un composant n'y existent pas.
+    if (value.kind === 'expression') {
+      const root = value.code.trim().split('.')[0];
+      if (!moduleScope(src.ast).includes(root) && scopeAt(src.ast, element).includes(root)) {
+        throw new SourceError(`« ${root} » n'existe que dans le composant, pas dans ${target.ref} : choisissez « Cet élément uniquement ».`);
+      }
+    }
     return setObjectKey(src, entry, key, value);
   }
 
   const opening = element.openingElement;
   const attr = styleAttribute(element);
-  const newObject = () => `{ ${keyCode(src, key)}: ${valueCode(src, value)} }`;
+  // Sur l'élément, les variables du composant (ex. `colors` de useTheme()) sont accessibles.
+  const scope = scopeAt(src.ast, element);
+  const newObject = () => `{ ${keyCode(src, key)}: ${valueCode(src, value, scope)} }`;
 
   if (!attr) return value.kind === 'remove' ? [] : [addAttribute(src, opening, `style={${newObject()}}`)];
   if (attr.value?.type !== 'JSXExpressionContainer') throw new SourceError("Le style de cet élément n'est pas modifiable.");
@@ -115,7 +124,7 @@ export function setStyle(src: SourceFile, element: AstNode, key: string, value: 
 
   if (expr.type === 'ObjectExpression') {
     if (removesLastKey(expr)) return [removeAttribute(src, opening, attr)];
-    return setObjectKey(src, expr, key, value);
+    return setObjectKey(src, expr, key, value, scope);
   }
 
   if (expr.type === 'ArrayExpression') {
@@ -123,7 +132,7 @@ export function setStyle(src: SourceFile, element: AstNode, key: string, value: 
     const last = elements[elements.length - 1];
     if (last && unwrap(last).type === 'ObjectExpression') {
       const object = unwrap(last);
-      if (!removesLastKey(object)) return setObjectKey(src, object, key, value);
+      if (!removesLastKey(object)) return setObjectKey(src, object, key, value, scope);
       if (elements.length === 2) return [{ start: expr.start, end: expr.end, text: codeOf(src, elements[0]) }];
       if (elements.length === 1) return [removeAttribute(src, opening, attr)];
       return [{ start: elements[elements.length - 2].end, end: last.end, text: '' }];
@@ -179,7 +188,7 @@ export function setProp(src: SourceFile, element: AstNode, prop: string, value: 
   if (value.kind === 'remove') return existing ? [removeAttribute(src, opening, existing)] : [];
 
   const attrValue =
-    value.kind === 'literal' && typeof value.value === 'string' && !/["\r\n\\]/.test(value.value) ? `"${value.value}"` : `{${valueCode(src, value)}}`;
+    value.kind === 'literal' && typeof value.value === 'string' && !/["\r\n\\]/.test(value.value) ? `"${value.value}"` : `{${valueCode(src, value, scopeAt(src.ast, element))}}`;
 
   if (!existing) return [addAttribute(src, opening, `${prop}=${attrValue}`)];
   if (existing.value == null) return [insert(existing.end, `=${attrValue}`)];
