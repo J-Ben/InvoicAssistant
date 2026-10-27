@@ -1,4 +1,4 @@
-import { Component, type ComponentType, type ReactElement, type ReactNode, createElement as h, useEffect, useState } from 'react';
+import { Component, type ComponentType, type ReactElement, type ReactNode, createElement as h, useEffect, useState, version } from 'react';
 import { ScrollView, StyleSheet, Text, View } from 'react-native';
 import { startInspector, StoryRoot } from './inspector';
 import { RouteParams, setRouteParamsContext } from './params';
@@ -34,7 +34,20 @@ function Presented({ component, props }: { component: ComponentType<any>; props:
     const timer = setTimeout(() => present.call(instance), 0);
     return () => clearTimeout(timer);
   };
-  return h(component, { ...props, ref });
+  return h(component, canTakeRef(component) ? { ...props, ref } : props);
+}
+
+/**
+ * React 19 passe `ref` comme une prop ordinaire ; React 18 l'interdit sur un composant fonction
+ * (avertissement) : seulement forwardRef, memo(forwardRef) et les classes.
+ */
+function canTakeRef(component: unknown): boolean {
+  if (Number(version.split('.')[0]) >= 19) return true;
+  const c = component as { $$typeof?: symbol; type?: unknown; prototype?: { isReactComponent?: unknown } } | null;
+  if (!c) return false;
+  if (c.$$typeof === Symbol.for('react.forward_ref')) return true;
+  if (c.$$typeof === Symbol.for('react.memo')) return canTakeRef(c.type);
+  return Boolean(c.prototype?.isReactComponent);
 }
 
 function resolveStory(storyId: string, manifest: CanvasManifest): ResolvedStory {

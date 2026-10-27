@@ -19,6 +19,7 @@
     "babel.cjs",
     "metro.cjs",
     "shims",
+    "runtime",
     "src/runtime",
     "src/shared",
     "README.md",
