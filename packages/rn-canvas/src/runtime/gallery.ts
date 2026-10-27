@@ -4,8 +4,8 @@
  *
  * Écrit sans JSX, comme le reste du runtime (invisible dans l'arbre des calques).
  */
-import { Component, type ReactNode, createElement as h, useEffect, useState } from 'react';
-import { Pressable, type PressableProps, ScrollView, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
+import { Component, type ReactNode, Suspense, createElement as h, useEffect, useState } from 'react';
+import { LogBox, Pressable, type PressableProps, ScrollView, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
 import type { EditorMessage, GalleryItem } from '../shared/protocol';
 import { neutralizeRouter } from './CanvasHost';
 import type { CanvasManifest } from './types';
@@ -51,13 +51,29 @@ export function GalleryHost({ loadManifest }: { loadManifest: () => CanvasManife
       const loaded = loadManifest();
       // Un composant qui navigue (bouton, carte…) ne doit pas faire sortir le cadre des aperçus.
       if (loaded.router) neutralizeRouter(loaded.router, STORY);
+      // Les erreurs des composants privés de données sont attendues (vignette « aperçu impossible ») :
+      // pas de bandeau d'erreurs de développement par-dessus la grille.
+      LogBox.ignoreAllLogs(true);
+      // Sur le web, le bandeau d'erreurs d'Expo se nourrit de console.error (où React signale aussi les
+      // erreurs rattrapées) : ce cadre ne sert qu'aux aperçus, on ne les y affiche pas.
+      console.error = () => {};
       return loaded;
     } catch {
       return null;
     }
   });
+  // La grille (et sa liste) vit sous les fournisseurs de l'app : certains, mémorisés (SQLiteProvider
+  // d'expo-sqlite), ignorent un changement d'enfants venu d'au-dessus, et la liste ne changerait plus.
+  const [grid] = useState(() => h(Grid, { components: manifest?.components }));
+  const Wrapper = manifest?.config?.wrapper;
+  return h(View, { style: styles.root }, Wrapper ? h(Wrapper, { story: { id: STORY, parameters: {} }, children: grid }) : grid);
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function Grid({ components }: { components?: Record<string, () => any> }) {
   const [items, setItems] = useState<GalleryItem[]>([]);
 
+  // Prête une fois montée sous les fournisseurs (polices, base…) : l'éditeur envoie alors la liste.
   useEffect(() => {
     const onMessage = (event: MessageEvent<EditorMessage>) => {
       if (event.data?.source === 'rn-canvas-editor' && event.data.type === 'gallery') setItems(event.data.items);
@@ -67,14 +83,11 @@ export function GalleryHost({ loadManifest }: { loadManifest: () => CanvasManife
     return () => window.removeEventListener('message', onMessage);
   }, []);
 
-  let content: ReactNode = h(
+  return h(
     ScrollView,
     { contentContainerStyle: styles.grid },
-    items.map((item) => h(Cell, { key: item.key, item, load: manifest?.components?.[item.key] })),
+    items.map((item) => h(Cell, { key: item.key, item, load: components?.[item.key] })),
   );
-  const Wrapper = manifest?.config?.wrapper;
-  if (Wrapper) content = h(Wrapper, { story: { id: STORY, parameters: {} }, children: content });
-  return h(View, { style: styles.root }, content);
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -92,7 +105,13 @@ function Cell({ item, load }: { item: GalleryItem; load?: () => any }) {
     preview = h(
       CellBoundary,
       { missing },
-      h(View, { pointerEvents: 'none', onLayout: (e: { nativeEvent: { layout: { height: number } } }) => setEmpty(e.nativeEvent.layout.height < 2) }, h(Render, { load, item })),
+      // Un composant qui attend des données (suspend) ne doit pas figer toute la grille : sans
+      // limite de Suspense, React garderait l'ancienne liste affichée.
+      h(
+        Suspense,
+        { fallback: h(Placeholder, { text: 'Chargement…' }) },
+        h(View, { pointerEvents: 'none', onLayout: (e: { nativeEvent: { layout: { height: number } } }) => setEmpty(e.nativeEvent.layout.height < 2) }, h(Render, { load, item })),
+      ),
       empty ? h(Placeholder, { text: missing.length ? `Rien d'affiché sans données : ${missing.join(', ')}.` : "Rien d'affiché avec les valeurs d'exemple." }) : null,
     );
   }
@@ -138,11 +157,13 @@ function Placeholder({ text }: { text: string }) {
 
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: '#ffffff' },
-  grid: { flexDirection: 'row', flexWrap: 'wrap', gap: 12, padding: 12 },
+  // `flex-start` : chaque vignette garde sa hauteur au lieu de s'étirer sur la plus haute de la rangée.
+  grid: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'flex-start', gap: 12, padding: 12 },
   cell: { borderRadius: 10, borderWidth: 1, borderColor: '#e4e4e9', backgroundColor: '#ffffff', overflow: 'hidden', cursor: 'pointer' } as object,
   cellHovered: { borderColor: '#7c5cff' },
-  preview: { height: 150, padding: 10, overflow: 'hidden', backgroundColor: '#f6f6f8' },
+  // Hauteur du composant, bornée : un badge reste petit, une carte haute est coupée.
+  preview: { minHeight: 48, maxHeight: 280, padding: 10, overflow: 'hidden', backgroundColor: '#f6f6f8' },
   name: { paddingHorizontal: 10, paddingVertical: 6, fontSize: 12, fontWeight: '600', color: '#1d1d22' },
-  placeholder: { flex: 1, minHeight: 120, alignItems: 'center', justifyContent: 'center', padding: 12 },
+  placeholder: { minHeight: 56, alignItems: 'center', justifyContent: 'center', padding: 8 },
   placeholderText: { fontSize: 11, color: '#7a7a85', textAlign: 'center' },
 });
