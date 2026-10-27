@@ -256,3 +256,19 @@ textarea { resize: vertical; }
 .row:hover .small-action, .row.selected .small-action { opacity: 1; }
 .save-variant { display: grid; grid-template-columns: 1fr auto; gap: 4px; margin: 4px 0 8px 24px; }
 .save-variant button { background: var(--accent); color: #fff; border: 0; border-radius: 4px; padding: 3px 8px; cursor: pointer; }
+
+.gradient-preview { height: 36px; border-radius: 8px; border: 1px solid var(--border); margin: 4px 0 10px; }
+.add-stop { margin: 4px 0 8px; padding: 4px 8px; border: 1px dashed var(--border); border-radius: 6px; background: none; color: var(--muted); font-size: 12px; cursor: pointer; }
+.add-stop:hover { color: var(--accent); border-color: var(--accent); }
+
+.context-menu { position: fixed; z-index: 50; min-width: 220px; padding: 4px; border-radius: 10px; background: var(--panel); border: 1px solid var(--border); box-shadow: 0 10px 30px rgb(0 0 0 / 0.2); font-size: 13px; }
+.context-menu-title { padding: 6px 10px 4px; color: var(--muted); font-size: 11px; font-family: ui-monospace, monospace; }
+.context-menu button { display: flex; width: 100%; justify-content: space-between; align-items: center; gap: 16px; padding: 6px 10px; border: 0; border-radius: 6px; background: none; color: var(--text); text-align: left; cursor: pointer; }
+.context-menu button:hover:not(:disabled) { background: var(--accent); color: #fff; }
+.context-menu button:disabled { opacity: 0.4; cursor: default; }
+.context-menu button.danger { color: var(--error); }
+.context-menu button.danger:hover { background: var(--error); color: #fff; }
+.context-menu kbd { font: inherit; font-size: 11px; opacity: 0.6; }
+.context-menu-separator { height: 1px; margin: 4px 6px; background: var(--border); }
+
+.build { margin-left: 8px; padding: 1px 6px; border-radius: 4px; background: var(--bg); color: var(--muted); font-size: 11px; font-weight: 400; }

@@ -16,6 +16,8 @@ interface Props {
   onHoverLayer: (loc: string | null) => void;
   selection: Selection | null;
   onEdit: (request: EditRequest) => void;
+  /** Clic droit sur un calque (le sélectionne et ouvre le menu). */
+  onLayerContextMenu: (loc: string, x: number, y: number) => void;
   /** Capture le stockage de l'écran et l'enregistre comme nouvelle variante. */
   onSaveVariant: (storyId: string, exportName: string) => void;
 }
@@ -105,7 +107,7 @@ function Screens({ project, hidden, onToggleStory, activeStory, onActivateStory,
   );
 }
 
-function Layers({ tree, activeStory, selectedLoc, onSelectLayer, onHoverLayer, onEdit }: Props) {
+function Layers({ tree, activeStory, selectedLoc, onSelectLayer, onHoverLayer, onLayerContextMenu, onEdit }: Props) {
   if (!activeStory) return <p className="hint">Cliquez sur un écran pour voir ses calques.</p>;
   if (tree.length === 0) return <p className="hint">Chargement des calques…</p>;
 
@@ -124,7 +126,16 @@ function Layers({ tree, activeStory, selectedLoc, onSelectLayer, onHoverLayer, o
   return (
     <>
       <p className="hint small">Glissez un calque pour le déplacer (même fichier), ou un composant depuis l'onglet Composants.</p>
-      <ul className="layers" onMouseLeave={() => onHoverLayer(null)}>
+      <ul
+        className="layers"
+        onMouseLeave={() => onHoverLayer(null)}
+        onContextMenu={(e) => {
+          const loc = (e.target as HTMLElement).closest<HTMLElement>('.layer')?.title;
+          if (!loc) return;
+          e.preventDefault();
+          onLayerContextMenu(loc, e.clientX, e.clientY);
+        }}
+      >
         {tree.map((node) => (
           <Layer key={node.key} node={node} depth={0} selectedLoc={selectedLoc} onSelect={onSelectLayer} onHover={onHoverLayer} onDrop={drop} />
         ))}

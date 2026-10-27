@@ -3,6 +3,10 @@ import { build, context } from 'esbuild';
 import fs from 'node:fs';
 
 const watch = process.argv.includes('--watch');
+// Version affichée dans l'éditeur : permet de vérifier quelle version tourne réellement.
+const { version } = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+const stamp = new Date().toISOString().slice(0, 16).replace('T', ' ');
+const BUILD = `${version} · ${stamp}`;
 
 fs.rmSync('dist', { recursive: true, force: true });
 fs.mkdirSync('dist/editor', { recursive: true });
@@ -31,7 +35,7 @@ const editor = {
   minify: !watch,
   sourcemap: true,
   loader: { '.css': 'css' },
-  define: { 'process.env.NODE_ENV': JSON.stringify(watch ? 'development' : 'production') },
+  define: { 'process.env.NODE_ENV': JSON.stringify(watch ? 'development' : 'production'), __RNC_BUILD__: JSON.stringify(BUILD) },
   logLevel: 'info',
 };
 

@@ -338,6 +338,9 @@ export function startInspector(storyId: string): InspectorHandle {
     if (nodes[0]) {
       const style = getComputedStyle(nodes[0]);
       for (const key of COMPUTED_KEYS) computed[key] = style[key];
+      // Dégradé de l'élément ou de son calque de fond (enfant direct) : couleurs réellement rendues.
+      const layered = [nodes[0], ...Array.from(nodes[0].children)].map((n) => getComputedStyle(n).backgroundImage).find((v) => v.includes('gradient'));
+      if (layered) computed.backgroundImage = layered;
     }
     return { loc: ancestors[0].loc, name: ancestors[0].name, ancestors, rect: unionRect(nodes), computed };
   };
@@ -461,6 +464,26 @@ export function startInspector(storyId: string): InspectorHandle {
         if (drop?.valid) post({ type: 'drop', kind: 'move', from: { loc: drag.loc, name: drag.name }, target: { loc: drop.loc, name: drop.name }, position: drop.position });
       }
       endDrag();
+    }
+    if (event.type === 'contextmenu') {
+      // Comme dans Figma : clic droit hors de la sélection = sélectionne l'élément visé, puis menu.
+      const e = event as MouseEvent;
+      const r = root();
+      const current = selected && r ? fibersAt(r, selected)[0] : null;
+      const rect = current ? unionRect(hostNodes(current)) : null;
+      const inside = rect && e.clientX >= rect.x && e.clientX <= rect.x + rect.width && e.clientY >= rect.y && e.clientY <= rect.y + rect.height;
+      if (!inside && r) {
+        const fiber = pickAt(e.clientX, e.clientY, e.altKey ? 'exact' : 'level');
+        const info = fiber ? selectionInfo(fiber, r) : null;
+        if (fiber && info) {
+          selected = info.loc;
+          remember(fiber);
+          draw();
+          post({ type: 'select', selection: info });
+        }
+      }
+      if (selected) post({ type: 'contextmenu', x: e.clientX, y: e.clientY });
+      return;
     }
     if (event.type === 'click' || event.type === 'dblclick') {
       if (suppressClick) {

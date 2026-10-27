@@ -2,7 +2,7 @@
  * Analyse statique d'un élément JSX : texte, props et styles, avec l'origine de chaque valeur.
  */
 import * as babelParser from '@babel/parser';
-import type { InspectResult, SourceValue, StyleSource, ValueOrigin } from '../shared/protocol.ts';
+import type { GradientDirection, GradientInfo, InspectResult, SourceValue, StyleSource, ValueOrigin } from '../shared/protocol.ts';
 import { type AstNode, type SourceFile, codeOf, findProperty, jsxElements, jsxName, memberPath, moduleDeclarators, propertyKey, scopeAt, unwrap, walk, type Binding, bindingsAt, freeNames } from './ast.ts';
 
 export class SourceError extends Error {
@@ -175,6 +175,8 @@ export function inspectElement(src: SourceFile, file: string, element: AstNode):
       code: styleExpr ? codeOf(src, styleExpr) : null,
     },
     scope: scopeAt(src.ast, element),
+    source: codeOf(src, element),
+    gradient: gradientOf(src, file, element),
   };
   annotateOrigins(result, bindingsAt(src.ast, element, src.code));
   return result;
@@ -240,4 +242,83 @@ function annotateOrigins(result: InspectResult, bindings: Map<string, Binding>):
     for (const p of source.properties) annotate(p.value);
   }
   for (const p of result.props) annotate(p.value);
+}
+
+// ---- Dégradés (expo-linear-gradient, react-native-linear-gradient) ----
+
+const GRADIENT = /(^|\.)LinearGradient$/;
+
+function jsxAttr(element: AstNode, prop: string): AstNode | undefined {
+  return element.openingElement.attributes.find((a: AstNode) => a.type === 'JSXAttribute' && a.name?.name === prop);
+}
+
+function isGradient(element: AstNode): boolean {
+  return GRADIENT.test(jsxName(element.openingElement.name) ?? '') && Boolean(jsxAttr(element, 'colors'));
+}
+
+/** `{ x: 0, y: 1 }` → [0, 1] ; null si ce n'est pas un objet littéral numérique. */
+function point(src: SourceFile, element: AstNode, prop: string): [number, number] | null | undefined {
+  const attr = jsxAttr(element, prop);
+  if (!attr) return undefined;
+  const expr = attr.value?.type === 'JSXExpressionContainer' ? unwrap(attr.value.expression) : null;
+  if (expr?.type !== 'ObjectExpression') return null;
+  const value = (key: string) => {
+    const p = expr.properties.find((q: AstNode) => q.type === 'ObjectProperty' && (q.key.name ?? q.key.value) === key);
+    const v = p ? sourceValue(src, p.value) : null;
+    return v?.kind === 'number' ? Number(v.value) : null;
+  };
+  const x = value('x');
+  const y = value('y');
+  return x === null || y === null ? null : [x, y];
+}
+
+function directionOf(src: SourceFile, element: AstNode): GradientDirection {
+  const start = point(src, element, 'start');
+  const end = point(src, element, 'end');
+  // Par défaut : de haut en bas.
+  if (start === undefined && end === undefined) return 'vertical';
+  const key = `${(start ?? [0.5, 0]).join(',')}>${(end ?? [0.5, 1]).join(',')}`;
+  const known: Record<string, GradientDirection> = {
+    '0,0>0,1': 'vertical',
+    '0.5,0>0.5,1': 'vertical',
+    '0,0>1,0': 'horizontal',
+    '0,0.5>1,0.5': 'horizontal',
+    '0,0>1,1': 'diagonal',
+    '0,1>1,0': 'diagonal-up',
+  };
+  return known[key] ?? 'custom';
+}
+
+/** Calque qui recouvre son parent (`StyleSheet.absoluteFill`, `position: 'absolute'`) : un fond. */
+function fillsParent(src: SourceFile, element: AstNode): boolean {
+  const style = jsxAttr(element, 'style');
+  return Boolean(style?.value) && /absoluteFill|position:\s*['"]absolute['"]/.test(codeOf(src, style!.value));
+}
+
+/** `<X />`, `{cond && <X />}` ou `{cond ? <X /> : …}` → l'élément X. */
+function conditionalElement(child: AstNode): AstNode | null {
+  if (child.type === 'JSXElement') return child;
+  if (child.type !== 'JSXExpressionContainer') return null;
+  const expr = unwrap(child.expression);
+  if (expr.type === 'LogicalExpression' && unwrap(expr.right).type === 'JSXElement') return unwrap(expr.right);
+  if (expr.type === 'ConditionalExpression' && unwrap(expr.consequent).type === 'JSXElement') return unwrap(expr.consequent);
+  return null;
+}
+
+/** Dégradé de l'élément, ou de son calque de fond (enfant direct `LinearGradient`). */
+export function gradientOf(src: SourceFile, file: string, element: AstNode): GradientInfo | null {
+  const own = isGradient(element);
+  const target = own ? element : meaningfulChildren(element).map(conditionalElement).find((c) => c !== null && isGradient(c) && fillsParent(src, c));
+  if (!target) return null;
+  const colors = jsxAttr(target, 'colors')!;
+  const expr = colors.value?.type === 'JSXExpressionContainer' ? unwrap(colors.value.expression) : null;
+  const stops = expr?.type === 'ArrayExpression' && expr.elements.every((e: AstNode | null) => e && e.type !== 'SpreadElement') ? expr.elements.map((e: AstNode) => sourceValue(src, e)) : null;
+  return {
+    loc: `${file}:${target.loc.start.line}:${target.loc.start.column}`,
+    name: jsxName(target.openingElement.name) ?? 'LinearGradient',
+    own,
+    stops,
+    colorsCode: colors.value ? codeOf(src, colors.value.type === 'JSXExpressionContainer' ? colors.value.expression : colors.value) : '',
+    direction: directionOf(src, target),
+  };
 }

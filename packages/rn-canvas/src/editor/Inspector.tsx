@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import type { EditRequest, InspectResult, SourceValue, StyleSource, StyleTarget, ThemeInfo, ValueOrigin } from '../shared/protocol.ts';
 import type { Selection } from './App.tsx';
+import { GradientSection } from './Gradient.tsx';
 import { type Choice, ColorInput, CommitInput, NumberField, SegmentedField, SelectField, TokenPicker } from './fields.tsx';
 import { displayValue, isColorKey, isToken, parseInput, toHex } from './values.ts';
 
@@ -9,7 +10,7 @@ interface Props {
   theme: ThemeInfo | null;
   root: string;
   onSelectAncestor: (loc: string) => void;
-  onEdit: (request: EditRequest) => void;
+  onEdit: (request: EditRequest) => void | Promise<unknown>;
 }
 
 const GROUPS: { title: string; keys: string[] }[] = [
@@ -315,6 +316,10 @@ function Details({ inspect, computed, theme, onEdit, parent, onSelectParent }: D
           <AddRow placeholder="nouvelle prop" onAdd={(prop, value) => onEdit({ op: 'setProp', loc, name, prop, value: parseInput(value, inspect.scope) })} />
         </section>
       ) : null}
+
+      {inspect.gradient && (
+        <GradientSection gradient={inspect.gradient} rendered={computed.backgroundImage} scope={inspect.scope} tokens={tokens} onEdit={onEdit} />
+      )}
 
       <section className="section">
         <h3>Style</h3>

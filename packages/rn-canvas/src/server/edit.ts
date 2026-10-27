@@ -2,6 +2,7 @@
  * Modifications chirurgicales du code. Chaque opération retourne des patchs texte
  * qui touchent le plus petit morceau de code possible, en respectant le style du fichier.
  */
+import * as babelParser from '@babel/parser';
 import type { EditValue, StyleTarget } from '../shared/protocol.ts';
 import { type AstNode, type Patch, type SourceFile, codeOf, findProperty, indentAt, jsxName, moduleDeclarators, moduleScope, quoteJs, scopeAt, unwrap } from './ast.ts';
 import { SourceError, meaningfulChildren, styleAttribute, stylesheetEntry } from './inspect.ts';
@@ -9,11 +10,68 @@ import { SourceError, meaningfulChildren, styleAttribute, stylesheetEntry } from
 const IDENTIFIER = /^[A-Za-z_$][\w$]*$/;
 const MEMBER_PATH = /^[A-Za-z_$][\w$]*(\.[A-Za-z_$][\w$]*)*$/;
 
+/**
+ * Expression composée acceptée (tableau de couleurs d'un dégradé, point `{ x, y }`…) : valeurs
+ * simples, jetons et noms déjà en portée, `+` ; un appel de fonction seulement s'il figure déjà tel
+ * quel dans le fichier (couleur calculée conservée). Rien d'autre : pas de code nouveau.
+ */
+function checkComposite(src: SourceFile, code: string, scope: string[]): void {
+  let expr: AstNode;
+  try {
+    expr = babelParser.parseExpression(code, { plugins: ['typescript', 'jsx'] }) as unknown as AstNode;
+  } catch {
+    throw new SourceError(`Expression invalide : « ${code} ».`);
+  }
+  const reject = (): never => {
+    throw new SourceError(`Expression non autorisée : « ${code} ». Seuls les valeurs simples, les jetons (ex. colors.primary) et les noms déjà utilisés ici sont acceptés.`);
+  };
+  const visit = (node: AstNode): void => {
+    switch (node.type) {
+      case 'StringLiteral':
+      case 'NumericLiteral':
+      case 'BooleanLiteral':
+      case 'NullLiteral':
+        return;
+      case 'UnaryExpression':
+        if (node.operator !== '-' || node.argument.type !== 'NumericLiteral') reject();
+        return;
+      case 'TemplateLiteral':
+        return node.expressions.forEach(visit);
+      case 'BinaryExpression':
+        if (node.operator !== '+') reject();
+        visit(node.left);
+        return visit(node.right);
+      case 'ArrayExpression':
+        return node.elements.forEach((e: AstNode | null) => (e && e.type !== 'SpreadElement' ? visit(e) : reject()));
+      case 'ObjectExpression':
+        return node.properties.forEach((p: AstNode) => (p.type === 'ObjectProperty' && !p.computed ? visit(p.value) : reject()));
+      case 'Identifier':
+        if (!scope.includes(node.name)) throw new SourceError(`« ${node.name} » n'est pas accessible à cet endroit du fichier.`);
+        return;
+      case 'MemberExpression': {
+        const path = code.slice(node.start, node.end);
+        if (node.computed || !MEMBER_PATH.test(path)) reject();
+        return visit(node.object);
+      }
+      case 'CallExpression':
+        if (!src.code.includes(code.slice(node.start, node.end))) reject();
+        return;
+      default:
+        reject();
+    }
+  };
+  visit(expr);
+}
+
 /** Code d'une valeur. Les expressions sont limitées aux jetons (`colors.primary`) déjà en portée. */
 export function valueCode(src: SourceFile, value: EditValue, scope: string[] = moduleScope(src.ast)): string {
   if (value.kind === 'remove') throw new SourceError('Valeur manquante.');
   if (value.kind === 'expression') {
     const code = value.code.trim();
+    if (/^[[{]/.test(code)) {
+      checkComposite(src, code, scope);
+      return code;
+    }
     if (!MEMBER_PATH.test(code)) throw new SourceError(`Expression non autorisée : « ${code} ». Seuls les jetons (ex. colors.primary) sont acceptés.`);
     const root = code.split('.')[0];
     if (!scope.includes(root)) throw new SourceError(`« ${root} » n'est pas accessible à cet endroit du fichier.`);

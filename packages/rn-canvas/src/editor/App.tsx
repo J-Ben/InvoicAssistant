@@ -2,11 +2,16 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { CanvasMode, EditorMessage, EditRequest, FlowLink, HistoryState, InspectResult, LayerNode, Payload, ProjectInfo, Rect, RuntimeMessage, SelectionInfo } from '../shared/protocol.ts';
 import { api } from './api.ts';
 import { Canvas, DEVICES, type Device, type LoadState } from './Canvas.tsx';
+import { parseLoc } from '../shared/protocol.ts';
 import { useEditorTab } from './tab.ts';
+import { ContextMenu } from './ContextMenu.tsx';
 import { Inspector } from './Inspector.tsx';
 import { Sidebar, takeDraggedComponent } from './Sidebar.tsx';
 
 type ThemePref = 'system' | 'light' | 'dark';
+/** Version et date de construction, injectées par build.mjs. */
+declare const __RNC_BUILD__: string | undefined;
+
 const THEME_KEY = 'rn-canvas:theme';
 const THEME_LABEL: Record<ThemePref, string> = { system: '◐ Système', light: '☀ Clair', dark: '☾ Sombre' };
 /**
@@ -89,6 +94,8 @@ export function App() {
   }, [tab.state]);
   // Mode Flux : liens de navigation lus dans le code et position de leurs boutons dans chaque écran.
   const [showFlows, setShowFlows] = useState(false);
+  // Menu du clic droit (écran ou calques), sur l'élément sélectionné.
+  const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
   const [flows, setFlows] = useState<FlowLink[]>([]);
   const [flowRects, setFlowRects] = useState<Record<string, Record<string, Rect>>>({});
   const modeRef = useRef(mode);
@@ -225,6 +232,14 @@ export function App() {
             if (component) editRef.current({ op: 'insert', loc: data.target.loc, name: data.target.name, position: data.position, component });
           }
           break;
+        case 'contextmenu': {
+          const frame = frames.current.get(data.story);
+          if (!frame) break;
+          const rect = frame.getBoundingClientRect();
+          const scale = rect.width / (frame.offsetWidth || 1);
+          setMenu({ x: rect.left + data.x * scale, y: rect.top + data.y * scale });
+          break;
+        }
         case 'wheel': {
           // Rejoue la molette sur le canevas, au point équivalent de l'éditeur.
           const frame = frames.current.get(data.story);
@@ -419,6 +434,7 @@ export function App() {
       <header className="topbar">
         <div className="brand">
           <span className="logo">◆</span> rn-canvas <span className="muted">/ {project.name}</span>
+          <span className="build" title="Version de l'éditeur">{typeof __RNC_BUILD__ === 'string' ? __RNC_BUILD__ : 'dev'}</span>
         </div>
         <div className="segmented" role="group" aria-label="Mode">
           <button className={mode === 'inspect' ? 'on' : ''} onClick={() => setMode('inspect')} title="Sélectionner des éléments (V)">
@@ -460,6 +476,11 @@ export function App() {
       </header>
 
       <Sidebar
+        onLayerContextMenu={(loc, x, y) => {
+          if (!activeStory) return;
+          selectLoc(activeStory, loc);
+          setMenu({ x, y });
+        }}
         project={project}
         hidden={hidden}
         onToggleStory={(id) =>
@@ -522,6 +543,38 @@ export function App() {
         onSelectAncestor={(loc) => selection && selectLoc(selection.story, loc)}
         onEdit={edit}
       />
+
+      {menu && selection && (
+        <ContextMenu
+          x={menu.x}
+          y={menu.y}
+          title={`<${selection.info.name}>`}
+          onClose={() => setMenu(null)}
+          items={(() => {
+            const { loc, name, ancestors } = selection.info;
+            const parsed = parseLoc(loc);
+            const copy = (text: string, what: string) =>
+              navigator.clipboard.writeText(text).then(
+                () => setToast({ kind: 'ok', text: `${what} copié` }),
+                () => showError('Copie refusée par le navigateur.'),
+              );
+            return [
+              { label: 'Dupliquer', hint: '⌘D', run: () => edit({ op: 'duplicate', loc, name }) },
+              { label: 'Copier le code JSX', disabled: !selection.inspect, run: () => selection.inspect && copy(selection.inspect.source, 'Code JSX') },
+              { label: "Copier l'emplacement", run: () => copy(loc, 'Emplacement') },
+              {
+                label: 'Ouvrir dans VS Code',
+                disabled: !parsed,
+                run: () => parsed && window.open(`vscode://file/${project.root}/${parsed.file}:${parsed.line}:${parsed.column + 1}`),
+              },
+              'separator' as const,
+              { label: 'Sélectionner le parent', disabled: ancestors.length < 2, run: () => ancestors[1] && selectLoc(selection.story, ancestors[1].loc, ancestors[1].name) },
+              'separator' as const,
+              { label: 'Supprimer', hint: '⌫', danger: true, run: () => edit({ op: 'remove', loc, name }) },
+            ];
+          })()}
+        />
+      )}
 
       {toast && <div className={`toast ${toast.kind}`}>{toast.text}</div>}
     </div>

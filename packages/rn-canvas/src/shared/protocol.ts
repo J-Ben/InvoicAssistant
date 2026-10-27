@@ -69,6 +69,8 @@ export type RuntimeMessage =
   | { source: 'rn-canvas'; type: 'drop'; story: string; kind: 'move' | 'component'; from: { loc: Loc; name: string } | null; target: { loc: Loc; name: string }; position: InsertPosition }
   | { source: 'rn-canvas'; type: 'snapshot'; story: string; requestId: number; storage: Record<string, string> }
   | { source: 'rn-canvas'; type: 'measured'; story: string; requestId: number; rects: Record<Loc, Rect>; viewport: { width: number; height: number } }
+  /** Clic droit sur l'élément sélectionné (x, y dans l'écran) : l'éditeur ouvre son menu. */
+  | { source: 'rn-canvas'; type: 'contextmenu'; story: string; x: number; y: number }
   /** ⌘/Ctrl + molette au-dessus de l'écran (zoom du canevas) ; x, y dans l'écran. */
   | { source: 'rn-canvas'; type: 'wheel'; story: string; deltaX: number; deltaY: number; x: number; y: number; metaKey: boolean; ctrlKey: boolean }
   /** Raccourci clavier tapé pendant que le focus est dans l'écran (relayé à l'éditeur). */
@@ -171,6 +173,24 @@ export interface InspectResult {
   style: { sources: StyleSource[]; editable: boolean; code: string | null };
   /** Identifiants utilisables comme jetons dans ce fichier (ex. `colors`). */
   scope: string[];
+  /** Code JSX de l'élément (pour le copier). */
+  source: string;
+  /** Fond dégradé (`<LinearGradient colors={…}>`) : l'élément lui-même ou son calque de fond. */
+  gradient: GradientInfo | null;
+}
+
+export type GradientDirection = 'vertical' | 'horizontal' | 'diagonal' | 'diagonal-up' | 'custom';
+
+export interface GradientInfo {
+  /** Élément `LinearGradient` à modifier. */
+  loc: Loc;
+  name: string;
+  /** false : calque de fond (enfant) de l'élément inspecté. */
+  own: boolean;
+  /** Couleurs, dans l'ordre ; null si le tableau est calculé (lecture seule). */
+  stops: SourceValue[] | null;
+  colorsCode: string;
+  direction: GradientDirection;
 }
 
 export type EditValue =

@@ -96,12 +96,21 @@ export function Canvas({ appUrl, isolateStories, stories, allStories, device, ac
     setView({ zoom, x: (width - contentWidth * zoom) / 2, y: Math.max(PADDING / 2, (height - contentHeight * zoom) / 2) });
   }, [stories.length, contentWidth, contentHeight]);
 
-  // Cadrage automatique une seule fois, à la toute première ouverture.
+  // Première ouverture : cadrage sur la première rangée d'écrans (lisible) ; ensuite, la vue mémorisée.
+  const fitFirstRow = useCallback(() => {
+    const el = viewport.current;
+    if (!el || stories.length === 0) return;
+    const { width, height } = el.getBoundingClientRect();
+    const rowWidth = columns * cellWidth - GAP;
+    const zoom = Math.min(1, (width - PADDING * 2) / rowWidth, (height - PADDING * 2) / (device.height + LABEL));
+    setView({ zoom, x: (width - rowWidth * zoom) / 2, y: PADDING / 2 });
+  }, [stories.length, columns, cellWidth, device.height]);
+
   useLayoutEffect(() => {
     if (autoFitted.current || stories.length === 0) return;
     autoFitted.current = true;
-    fit();
-  }, [fit, stories.length]);
+    fitFirstRow();
+  }, [fitFirstRow, stories.length]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
