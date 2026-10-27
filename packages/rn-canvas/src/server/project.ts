@@ -9,6 +9,7 @@ import { type AstNode, type Patch, type SourceFile, applyPatches, findProperty, 
 import { setProp, setStyle, setText, setToken, themeObject } from './edit.ts';
 import { examplesFile, generateExamples, writeIfChanged } from './examples.ts';
 import { matchRoute, navigationLinks, relativeImports, resolveImport, routesOf } from './flows.ts';
+import { navigationScreens } from './navigators.ts';
 import { SourceError, findElement, inspectElement, locOfIndex, meaningfulChildren, normalizeJsxText, sourceValue } from './inspect.ts';
 import { PRIMITIVES, componentsOf } from './library.ts';
 import { type Insertion, componentJsx, duplicateElement, ensureImport, finalOffset, insertion, moveElement, removeElement } from './structure.ts';
@@ -63,7 +64,9 @@ const HISTORY_LIMIT = 100;
 
 export const CONFIG_FILE = 'rn-canvas.json';
 const CANVAS_FILE = /\.canvas\.(tsx|ts|jsx|js)$/;
-const IGNORED_DIRS = new Set(['node_modules', '.git', '.expo', 'dist', 'build', 'ios', 'android']);
+const IGNORED_DIRS = new Set(['node_modules', '.git', '.expo', 'dist', 'build', 'ios', 'android', '__mocks__', '__tests__']);
+/** Fichiers qui ne sont pas ceux de l'app : tests, stories d'autres outils, anciennes versions gardées à côté. */
+const NOT_APP_FILE = /\.(test|spec|stories|story|old|bak|orig|ref-example)\./;
 
 export class Project {
   readonly root: string;
@@ -192,7 +195,7 @@ export class Project {
     // Contexte interne d'expo-router (paramètres de route) : facultatif, absent si son chemin change.
     const router = pkg?.dependencies?.['expo-router']
       ? `\n  router: require('expo-router').router,\n  routeParams: (() => {\n    try {\n      return require('expo-router/build/Route').LocalRouteParamsContext;\n    } catch {\n      return undefined;\n    }\n  })(),`
-      : '';
+      : navigationManifest(pkg?.dependencies ?? {});
     const entries = this.canvasFiles()
       .map((file) => `    ${JSON.stringify(file)}: () => require(${JSON.stringify(importPath(file))}),`)
       .join('\n');
@@ -257,10 +260,10 @@ export default manifest;
     return out;
   }
 
-  /** Routes d'expo-router qui n'ont pas encore d'écran dans le canevas. */
-  missingRoutes(): { file: string; name: string; title: string; params: string[] }[] {
+  /** Routes (expo-router, sinon écrans de React Navigation) qui n'ont pas encore d'écran dans le canevas. */
+  missingRoutes(): MissingRoute[] {
     const routerRoot = this.config.routerRoot;
-    if (!routerRoot) return [];
+    if (!routerRoot) return this.missingNavigationScreens();
     const routes = routesOf(this.root, routerRoot);
     const covered = this.screensOfStories(routes.map((r) => r.file));
     return routes
@@ -273,14 +276,38 @@ export default manifest;
           .filter((s) => !/^\(.+\)$/.test(s));
         if (parts[parts.length - 1] === 'index') parts.pop();
         const words = parts.map((s) => s.replace(/^\[(\.\.\.)?(.+)\]$/, '$2'));
-        const pascal = words.map((w) => w.replace(/(^|[-_\s])(\w)/g, (_m, _s, c: string) => c.toUpperCase())).join('') || 'Accueil';
+        const params = parts.filter((s) => /^\[.+\]$/.test(s)).map((s) => s.replace(/^\[(\.\.\.)?(.+)\]$/, '$2'));
         return {
           file: r.file,
-          name: pascal,
+          name: pascalCase(words.join('-')) || 'Accueil',
           title: parts.length ? parts.join(' / ') : 'Accueil',
-          params: parts.filter((s) => /^\[.+\]$/.test(s)).map((s) => s.replace(/^\[(\.\.\.)?(.+)\]$/, '$2')),
+          params,
+          exportName: 'default',
+          paramValues: params.map((name) => ({ name, example: "'1'" })),
+          optional: [],
         };
       });
+  }
+
+  /** Écrans déclarés à React Navigation (`<Stack.Screen name component>`) sans fichier canvas. */
+  private missingNavigationScreens(): MissingRoute[] {
+    const pkg = readJson(path.join(this.root, 'package.json')) as { dependencies?: Record<string, string> } | null;
+    if (!pkg?.dependencies?.['@react-navigation/native']) return [];
+    const dirs = [...new Set([...this.config.include, 'src', 'app'])].filter((d) => fs.existsSync(this.resolve(d)));
+    const files = this.sourceFiles((name) => /\.(tsx|jsx|ts|js)$/.test(name) && !CANVAS_FILE.test(name) && !/\.(test|spec|d|stories)\./.test(name), dirs);
+    const screens = navigationScreens(this.root, files);
+    const covered = this.screensOfStories(screens.map((s) => s.file));
+    return screens
+      .filter((s) => !covered.has(s.file) && !this.config.ignoreRoutes.includes(s.file))
+      .map((s) => ({
+        file: s.file,
+        name: pascalCase(s.route) || 'Ecran',
+        title: s.route,
+        params: s.params.map((p) => p.name),
+        exportName: s.exportName,
+        paramValues: s.params,
+        optional: s.optional,
+      }));
   }
 
   /**
@@ -296,11 +323,18 @@ export default manifest;
       for (let n = 2; fs.existsSync(this.resolve(target)); n++) target = `${dir}/${route.name}${n}.canvas.tsx`;
       let spec = path.posix.relative(dir, route.file.replace(/\.(tsx|jsx|ts|js)$/, ''));
       if (!spec.startsWith('.')) spec = `./${spec}`;
-      const params = route.params.length ? `, params: { ${route.params.map((p) => `${/^[A-Za-z_$][\w$]*$/.test(p) ? p : JSON.stringify(p)}: '1'`).join(', ')} }` : '';
+      const key = (p: string) => (/^[A-Za-z_$][\w$]*$/.test(p) ? p : JSON.stringify(p));
+      const params = route.paramValues.length ? `, params: { ${route.paramValues.map((p) => `${key(p.name)}: ${p.example}`).join(', ')} }` : '';
+      const importLine = route.exportName === 'default' ? `import Screen from ${JSON.stringify(spec)};` : `import { ${route.exportName} as Screen } from ${JSON.stringify(spec)};`;
+      const notes = [
+        route.params.length ? ` Paramètre${route.params.length > 1 ? 's' : ''} de route (${route.params.join(', ')}) : valeur d'exemple, à remplacer par un identifiant existant.` : '',
+        route.optional.length ? ` Facultatifs : ${route.optional.join(', ')}.` : '',
+      ].join('');
+      const origin = this.config.routerRoot ? route.file : `${route.file} (route « ${route.title} »)`;
       const code = `import type { CanvasMeta, CanvasStory } from 'rn-canvas/runtime';
-import Screen from ${JSON.stringify(spec)};
+${importLine}
 
-// Écran généré depuis ${route.file}.${route.params.length ? ` Paramètre${route.params.length > 1 ? 's' : ''} de route (${route.params.join(', ')}) : valeur d'exemple, à remplacer par un identifiant existant.` : ''}
+// Écran généré depuis ${origin}.${notes}
 export default { title: ${JSON.stringify(route.title.replace(/^\w/, (c) => c.toUpperCase()))}, component: Screen${params} } satisfies CanvasMeta;
 
 // Chaque écran a son propre stockage (vide au départ, conservé entre les sessions) :
@@ -370,7 +404,7 @@ export const Actuel: CanvasStory = {};
   private libraryCache = new Map<string, { mtime: number; entries: ComponentEntry[] }>();
 
   components(): ComponentEntry[] {
-    const files = this.sourceFiles((name) => /\.(tsx|jsx)$/.test(name) && !CANVAS_FILE.test(name) && !/\.(test|spec)\./.test(name));
+    const files = this.sourceFiles((name) => /\.(tsx|jsx)$/.test(name) && !CANVAS_FILE.test(name) && !NOT_APP_FILE.test(name));
     const entries = files.flatMap((file) => {
       const abs = this.resolve(file);
       const mtime = fs.statSync(abs).mtimeMs;
@@ -761,6 +795,37 @@ export function stripJsonComments(text: string): string {
     }
   }
   return out;
+}
+
+/**
+ * React Navigation sans expo-router : chaque écran est affiché dans un navigateur à un seul écran
+ * (paramètres de route, `navigation`), créé avec le navigateur de pile installé.
+ */
+export interface MissingRoute {
+  file: string;
+  name: string;
+  title: string;
+  params: string[];
+  /** Export du fichier de l'écran (`default`, ou un nom avec React Navigation). */
+  exportName: string;
+  /** Valeurs d'exemple des paramètres (code source : `'1'`, `1`, `{}`…). */
+  paramValues: { name: string; example: string }[];
+  optional: string[];
+}
+
+/** `invoice-detail` / `InvoiceDetail` / `invoice detail` → `InvoiceDetail`. */
+function pascalCase(value: string): string {
+  return value.replace(/(^|[-_\s/]+)(\w)/g, (_m, _s, c: string) => c.toUpperCase()).replace(/[^\w]/g, '');
+}
+
+function navigationManifest(deps: Record<string, string>): string {
+  if (!deps['@react-navigation/native']) return '';
+  const stack = deps['@react-navigation/native-stack']
+    ? "require('@react-navigation/native-stack').createNativeStackNavigator"
+    : deps['@react-navigation/stack']
+      ? "require('@react-navigation/stack').createStackNavigator"
+      : 'undefined';
+  return `\n  navigation: { native: require('@react-navigation/native'), createStack: ${stack} },`;
 }
 
 function readJson(file: string): unknown {

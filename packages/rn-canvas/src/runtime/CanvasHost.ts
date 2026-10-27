@@ -1,16 +1,21 @@
 import { Component, type ComponentType, type ReactElement, type ReactNode, createElement as h, useEffect, useState, version } from 'react';
 import { ScrollView, StyleSheet, Text, View } from 'react-native';
 import { startInspector, StoryRoot } from './inspector';
+import { hasNavigation, NavigationShell, setNavigation } from './navigation';
 import { RouteParams, setRouteParamsContext } from './params';
 import type { CanvasManifest, CanvasMeta, CanvasStoryObject, CanvasWrapperProps } from './types';
 
+/** Props ajoutées par le navigateur (React Navigation) : `navigation`, `route`. */
+type ScreenProps = Record<string, unknown>;
+
 interface ResolvedStory {
-  render: () => ReactElement;
+  render: (screen?: ScreenProps) => ReactElement;
   wrappers: ComponentType<CanvasWrapperProps>[];
   setups: (() => void | (() => void))[];
   parameters: Record<string, unknown>;
   storage: Record<string, string> | null;
-  params: Record<string, string> | null;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  params: Record<string, any> | null;
 }
 
 /** Props de l'exemple `component` (variante `variant`, sinon la première) déclaré dans rn-canvas.config.tsx. */
@@ -65,16 +70,17 @@ function resolveStory(storyId: string, manifest: CanvasManifest): ResolvedStory 
   const wrappers = [manifest.config?.wrapper, meta.wrapper].filter(Boolean) as ComponentType<CanvasWrapperProps>[];
 
   if (typeof story === 'function') {
-    return { render: () => h(story), wrappers, setups: meta.setup ? [meta.setup] : [], parameters: meta.parameters ?? {}, storage: null, params: meta.params ?? null };
+    return { render: (screen) => h(story, screen), wrappers, setups: meta.setup ? [meta.setup] : [], parameters: meta.parameters ?? {}, storage: null, params: meta.params ?? null };
   }
 
   const s = story as CanvasStoryObject;
   // Ordre : props de l'écran (valeurs de repli), puis exemple déclaré, puis props de la variante.
   const props = { ...meta.props, ...exampleProps(manifest, meta.example, s.example), ...s.props };
+  // `navigation` et `route` du navigateur, sauf si la variante les fournit elle-même.
   const render = s.render
-    ? () => s.render!(props)
+    ? (screen?: ScreenProps) => s.render!({ ...screen, ...props })
     : meta.component
-      ? () => h(Presented, { component: meta.component!, props })
+      ? (screen?: ScreenProps) => h(Presented, { component: meta.component!, props: { ...screen, ...props } })
       : () => {
           throw new Error(`« ${exportName} » n'a ni render ni component (export par défaut).`);
         };
@@ -95,6 +101,7 @@ export function CanvasHost({ storyId, loadManifest }: { storyId: string; loadMan
       const manifest = loadManifest();
       if (manifest.router) neutralizeRouter(manifest.router, storyId);
       setRouteParamsContext(manifest.routeParams);
+      setNavigation(manifest.router ? null : manifest.navigation, storyId);
       const story = resolveStory(storyId, manifest);
       if (story.storage) restoreStorage(story.storage);
       const cleanups = story.setups.map((setup) => setup());
@@ -116,13 +123,20 @@ export function CanvasHost({ storyId, loadManifest }: { storyId: string; loadMan
   if (!state.story) return h(ErrorView, { error: state.error! });
 
   const { story } = state;
-  let element: ReactNode = h(StoryRoot, null, h(StoryRender, { render: story.render }));
-  // Paramètres de route : ceux que l'écran lirait dans l'URL (useLocalSearchParams).
-  if (story.params) element = h(RouteParams, { params: story.params }, element);
+  const screen = (props?: ScreenProps) => h(StoryRoot, null, h(StoryRender, { render: () => story.render(props) }));
+  let element: ReactNode;
+  if (hasNavigation()) {
+    // React Navigation : un conteneur et une pile à un seul écran, route.params = params.
+    element = h(NavigationShell, { params: story.params, render: screen });
+  } else {
+    element = screen();
+    // Paramètres de route : ceux que l'écran lirait dans l'URL (useLocalSearchParams).
+    if (story.params) element = h(RouteParams, { params: story.params }, element);
+  }
   for (const Wrapper of [...story.wrappers].reverse()) {
     element = h(Wrapper, { story: { id: storyId, parameters: story.parameters }, children: element });
   }
-  return h(ErrorBoundary, { storyId }, h(View, { style: styles.root }, element));
+  return h(ErrorBoundary, { storyId, hasParams: Boolean(story.params) }, h(View, { style: styles.root }, element));
 }
 
 const NAVIGATION_METHODS = ['navigate', 'push', 'replace', 'back', 'goBack', 'dismiss', 'dismissAll', 'dismissTo', 'linkTo', 'reload'];
@@ -160,7 +174,7 @@ function StoryRender({ render }: { render: () => ReactElement }) {
   return render();
 }
 
-class ErrorBoundary extends Component<{ storyId: string; children?: ReactNode }, { error: Error | null }> {
+class ErrorBoundary extends Component<{ storyId: string; hasParams: boolean; children?: ReactNode }, { error: Error | null }> {
   state = { error: null as Error | null };
 
   static getDerivedStateFromError(error: Error) {
@@ -172,16 +186,27 @@ class ErrorBoundary extends Component<{ storyId: string; children?: ReactNode },
   }
 
   render() {
-    return this.state.error ? h(ErrorView, { error: this.state.error }) : this.props.children;
+    return this.state.error ? h(ErrorView, { error: this.state.error, hint: hintFor(this.state.error, this.props.hasParams) }) : this.props.children;
   }
 }
 
-function ErrorView({ error }: { error: Error }) {
+/**
+ * Piste pour l'erreur la plus fréquente d'un écran affiché seul : il lit un paramètre de route
+ * (`route.params.id`, `useLocalSearchParams()`) que personne ne lui a passé.
+ */
+export function hintFor(error: Error, hasParams: boolean): string | null {
+  const reading = /Cannot read propert(?:y|ies) of undefined \(reading '([^']+)'\)|undefined is not an object \(evaluating '[^']*?\.?(\w+)'\)/.exec(error.message);
+  if (!reading || hasParams) return null;
+  return `L'écran lit probablement un paramètre de route (« ${reading[1] ?? reading[2]} ») : déclarez-le dans son fichier canvas, ex. params: { id: '42' }.`;
+}
+
+function ErrorView({ error, hint }: { error: Error; hint?: string | null }) {
   return h(
     ScrollView,
     { contentContainerStyle: styles.error },
     h(Text, { style: styles.errorTitle }, "Impossible d'afficher cet écran"),
     h(Text, { style: styles.errorMessage }, error.message),
+    hint ? h(Text, { style: styles.errorHint }, hint) : null,
   );
 }
 
@@ -190,4 +215,5 @@ const styles = StyleSheet.create({
   error: { padding: 24, gap: 12 },
   errorTitle: { fontSize: 16, fontWeight: '600', color: '#B42318' },
   errorMessage: { fontSize: 13, color: '#344054', fontFamily: 'monospace' },
+  errorHint: { fontSize: 13, color: '#475467' },
 });

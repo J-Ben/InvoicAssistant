@@ -27,8 +27,12 @@ export interface CanvasStoryObject<P = Record<string, unknown>> {
   storage?: Record<string, string>;
   /** Variante des exemples du composant (`examples` de rn-canvas.config.tsx) à utiliser, par son nom. */
   example?: string;
-  /** Paramètres de route (expo-router) lus par `useLocalSearchParams()` : `{ id: '42' }` pour app/invoice/[id].tsx. */
-  params?: Record<string, string>;
+  /**
+   * Paramètres de route : lus par `useLocalSearchParams()` avec expo-router (`{ id: '42' }` pour
+   * app/invoice/[id].tsx), par `route.params` / `useRoute()` avec React Navigation.
+   */
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  params?: Record<string, any>;
 }
 
 export type CanvasStory<P = Record<string, unknown>> = CanvasStoryObject<P> | ComponentType;
@@ -49,7 +53,8 @@ export interface CanvasMeta<P = any> {
   setup?: () => void | (() => void);
   parameters?: Record<string, unknown>;
   /** Paramètres de route par défaut de l'écran (voir `CanvasStoryObject.params`). */
-  params?: Record<string, string>;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  params?: Record<string, any>;
 }
 
 /** Exemple d'un composant de la bibliothèque : ses props (et enfants) pour l'aperçu. */
@@ -83,6 +88,12 @@ export interface CanvasManifest {
   /** Contexte des paramètres de route d'expo-router, pour fournir `params` aux écrans. */
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   routeParams?: Context<any>;
+  /**
+   * React Navigation (sans expo-router) : `@react-navigation/native` et le créateur de pile
+   * installé. Chaque écran est rendu dans son propre conteneur, avec `route.params` = `params`.
+   */
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  navigation?: { native: Record<string, any>; createStack?: () => any };
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   files: Record<string, () => any>;
   /** Composants de la bibliothèque (`fichier#Nom`), pour leurs aperçus dans l'éditeur. */

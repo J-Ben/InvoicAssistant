@@ -177,6 +177,8 @@ function singular(name: string): string {
   return name.replace(/ies$/, 'y').replace(/s$/, '');
 }
 
+/** Champ texte qui porte un montant (`amount`, `totalAmount`, `price`…), pas `priceLabel` ni `summary`. */
+const MONEY = /(amount|total|price|cost|^sum|balance|budget|spent|montant|prix|solde)$/i;
 const PEOPLE = /member|user|owner|author|person|profile|contact|createdBy|actor/i;
 
 const SAMPLES: [RegExp, string[]][] = [
@@ -202,6 +204,8 @@ function stringFor(name: string, n: number, isoDay: (offset: number) => string, 
   if (/colou?r|Bg$|background|accent|tint/i.test(name)) return ['#7C5CFF', '#12B76A', '#F79009'][n % 3];
   if (/url|uri|image|photo|avatar|icon/i.test(name)) return '';
   if (/code/i.test(name)) return 'ABC123';
+  // Montant transmis en texte (déjà formaté par l'API ou l'app).
+  if (MONEY.test(name)) return ['1 250,00 €', '18,90 €', '120,00 €'][n % 3];
   for (const [pattern, values] of SAMPLES) if (pattern.test(name)) return values[n % values.length];
   return n ? `Exemple ${n + 1}` : 'Exemple';
 }

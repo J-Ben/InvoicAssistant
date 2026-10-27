@@ -107,7 +107,7 @@ export class Invoice {
 `,
     'src/components/InvoiceCard.tsx': `import { Invoice } from '@domain/Invoice';
 interface Project { id: string; name: string; targetAmount: number }
-export function InvoiceCard(props: { invoices: Invoice[]; project: Project; onPress: () => void; visible?: boolean; subtitle?: string; currency: string }) { return null; }
+export function InvoiceCard(props: { invoices: Invoice[]; project: Project; onPress: () => void; visible?: boolean; subtitle?: string; currency: string; totalAmount: string; summary: string }) { return null; }
 `,
   });
   fs.mkdirSync(path.join(root, 'node_modules'), { recursive: true });
@@ -125,5 +125,7 @@ export function InvoiceCard(props: { invoices: Invoice[]; project: Project; onPr
   assert.match(code, /onPress: noop/);
   assert.match(code, /visible: true/);
   assert.match(code, /currency: 'EUR'/);
+  assert.match(code, /totalAmount: '1 250,00 €'/);
+  assert.match(code, /summary: 'Texte d’exemple'|summary: 'Exemple'/);
   assert.ok(!code.includes('subtitle') && !code.includes('note:'), code);
 });

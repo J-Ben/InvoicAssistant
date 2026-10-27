@@ -163,3 +163,66 @@ test('rn-canvas shim : remplacement écrit dans canvas/shims, exports des types 
   assert.equal(writeShim(root, '@acme/native-pay').created, false);
   assert.equal(fs.readFileSync(path.join(root, result.file), 'utf8'), '// à la main\n');
 });
+
+test('React Navigation : écrans des <Stack.Screen>, réexports suivis, paramètres des ParamList ou de route.params', async () => {
+  const { Project } = await import('../src/server/project.ts');
+  const root = project({
+    'package.json': '{"dependencies":{"@react-navigation/native":"7.0.0","@react-navigation/native-stack":"7.0.0"}}',
+    'rn-canvas.json': '{"include":["app","canvas"]}',
+    'app/navigation/types.ts': 'export type RootStackParamList = {\n  Home: undefined;\n  InvoiceDetail: { invoiceId: string; count: number; mode?: "edit" };\n};\n',
+    'app/navigation/index.tsx': `import { createNativeStackNavigator } from '@react-navigation/native-stack';
+import { HomeScreen, InvoiceDetailScreen } from '../screens';
+const Stack = createNativeStackNavigator();
+export function RootStack() {
+  return (
+    <Stack.Navigator>
+      <Stack.Screen name="Home" component={HomeScreen} />
+      <Stack.Screen name="InvoiceDetail" component={InvoiceDetailScreen} />
+      <Stack.Screen name="Settings" getComponent={() => require('../screens/Settings').default} />
+      <Stack.Screen name="HomeAgain" component={HomeScreen} />
+    </Stack.Navigator>
+  );
+}
+`,
+    'app/screens/index.ts': "export { default as HomeScreen } from './Home';\nexport * from './InvoiceDetail';\n",
+    'app/screens/Home.tsx': 'export default function Home() { return null; }\n',
+    'app/screens/InvoiceDetail.tsx': 'export function InvoiceDetailScreen() { return null; }\n',
+    'app/screens/Settings.tsx': 'export default function Settings({ route }) { const { section } = route.params; return route.params?.tab ?? section; }\n',
+  });
+  const p = new Project(root);
+  const missing = p.missingRoutes();
+  assert.deepEqual(
+    missing.map((m) => [m.name, m.file, m.exportName, m.params.join(',')]),
+    [
+      ['Home', 'app/screens/Home.tsx', 'default', ''],
+      ['InvoiceDetail', 'app/screens/InvoiceDetail.tsx', 'InvoiceDetailScreen', 'invoiceId,count'],
+      ['Settings', 'app/screens/Settings.tsx', 'default', 'section,tab'],
+    ],
+  );
+  assert.deepEqual(missing[1].optional, ['mode']);
+  const { created } = p.generateRouteStories();
+  assert.deepEqual(created, ['canvas/Home.canvas.tsx', 'canvas/InvoiceDetail.canvas.tsx', 'canvas/Settings.canvas.tsx']);
+  const detail = fs.readFileSync(path.join(root, 'canvas/InvoiceDetail.canvas.tsx'), 'utf8');
+  assert.match(detail, /import \{ InvoiceDetailScreen as Screen \} from "\.\.\/app\/screens\/InvoiceDetail";/);
+  assert.match(detail, /params: \{ invoiceId: '1', count: 1 \}/);
+  assert.match(detail, /Facultatifs : mode\./);
+  assert.doesNotThrow(() => parse(detail, 'x.tsx'));
+  // Couverts une fois générés ; le manifeste fournit la navigation au runtime.
+  assert.deepEqual(new Project(root).missingRoutes(), []);
+  const manifest = fs.readFileSync(path.join(root, 'rn-canvas.stories.ts'), 'utf8');
+  assert.match(manifest, /navigation: \{ native: require\('@react-navigation\/native'\), createStack: require\('@react-navigation\/native-stack'\)\.createNativeStackNavigator \},/);
+});
+
+test('bibliothèque : fichiers morts (anciennes versions, stories, mocks) ignorés', async () => {
+  const { Project } = await import('../src/server/project.ts');
+  const root = project({
+    'rn-canvas.json': '{"include":["app"]}',
+    'app/Card.tsx': 'export function Card() { return null; }\n',
+    'app/Card.old.tsx': 'export function CardOld() { return null; }\n',
+    'app/Card.ref-example.tsx': 'export function CardRef() { return null; }\n',
+    'app/Card.stories.tsx': 'export function CardStory() { return null; }\n',
+    'app/__mocks__/Mock.tsx': 'export function Mock() { return null; }\n',
+  });
+  const names = new Project(root).components().filter((c) => c.file).map((c) => c.name);
+  assert.deepEqual(names, ['Card']);
+});

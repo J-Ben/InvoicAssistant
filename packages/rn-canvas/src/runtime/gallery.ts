@@ -8,6 +8,7 @@ import { Component, type ReactNode, Suspense, createElement as h, useEffect, use
 import { LogBox, Pressable, type PressableProps, ScrollView, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
 import type { EditorMessage, GalleryItem } from '../shared/protocol';
 import { neutralizeRouter } from './CanvasHost';
+import { hasNavigation, NavigationShell, setNavigation } from './navigation';
 import type { CanvasManifest, ComponentExample } from './types';
 
 /** Contenu en position absolue (bandeau, pastille) : le conteneur mesure 0 mais quelque chose s'affiche. */
@@ -63,6 +64,8 @@ export function GalleryHost({ loadManifest }: { loadManifest: () => CanvasManife
       const loaded = loadManifest();
       // Un composant qui navigue (bouton, carte…) ne doit pas faire sortir le cadre des aperçus.
       if (loaded.router) neutralizeRouter(loaded.router, STORY);
+      // React Navigation : un conteneur pour les composants qui appellent useNavigation().
+      setNavigation(loaded.router ? null : loaded.navigation, STORY);
       // Les erreurs des composants privés de données sont attendues (vignette « aperçu impossible ») :
       // pas de bandeau d'erreurs de développement par-dessus la grille.
       LogBox.ignoreAllLogs(true);
@@ -76,7 +79,10 @@ export function GalleryHost({ loadManifest }: { loadManifest: () => CanvasManife
   });
   // La grille (et sa liste) vit sous les fournisseurs de l'app : certains, mémorisés (SQLiteProvider
   // d'expo-sqlite), ignorent un changement d'enfants venu d'au-dessus, et la liste ne changerait plus.
-  const [grid] = useState(() => h(Grid, { components: manifest?.components, examples: manifest?.config?.examples }));
+  const [grid] = useState(() => {
+    const element = h(Grid, { components: manifest?.components, examples: manifest?.config?.examples });
+    return hasNavigation() ? h(NavigationShell, { params: null, render: () => element }) : element;
+  });
   const Wrapper = manifest?.config?.wrapper;
   return h(View, { style: styles.root }, Wrapper ? h(Wrapper, { story: { id: STORY, parameters: {} }, children: grid }) : grid);
 }

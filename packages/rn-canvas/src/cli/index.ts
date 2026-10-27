@@ -4,7 +4,7 @@
  *   rn-canvas init       branche le projet courant (config, Babel, point d'entrée, manifeste)
  *   rn-canvas dev        lance l'éditeur (+ le serveur Expo si besoin)
  *   rn-canvas generate   régénère le manifeste des stories
- *   rn-canvas screens    crée un fichier canvas par route d'expo-router qui n'en a pas
+ *   rn-canvas screens    crée un fichier canvas par route (expo-router ou React Navigation) qui n'en a pas
  *   rn-canvas examples   données d'exemple des composants, tirées des types de leurs props
  *   rn-canvas providers  propose rn-canvas.config.tsx à partir des fournisseurs du layout racine
  *   rn-canvas shim <m>   remplacement web inoffensif d'un module natif, pour le canevas
@@ -56,7 +56,7 @@ function help() {
   rn-canvas dev [--port 7007]    Lance l'éditeur ; démarre Expo si l'app ne répond pas
               [--no-app]         … sans démarrer Expo
   rn-canvas generate             Régénère le manifeste des stories
-  rn-canvas screens              Crée un écran du canevas pour chaque route de app/ qui n'en a pas
+  rn-canvas screens              Crée un écran du canevas pour chaque route (app/ ou <Stack.Screen>) qui n'en a pas
   rn-canvas examples             Génère les données d'exemple des composants à partir des types de leurs props
   rn-canvas providers            Reprend les fournisseurs de app/_layout.tsx (ou App.tsx) dans rn-canvas.config.tsx
               [--print]          … ou les affiche sans rien écrire
@@ -72,9 +72,10 @@ function mcp() {
 
 function screens() {
   const project = new Project(root);
-  if (!project.config.routerRoot) return log("Pas de dossier de routes expo-router (app/) : rien à générer.");
   const { created } = project.generateRouteStories();
-  if (!created.length) return log('Chaque route a déjà son écran.');
+  if (!created.length) {
+    return log(project.config.routerRoot ? 'Chaque route a déjà son écran.' : 'Aucun écran à créer : chaque écran React Navigation (<Stack.Screen name component>) a déjà le sien, ou aucun n’a été trouvé.');
+  }
   log(`${created.length} écran(s) créé(s) :`);
   for (const file of created) console.log(`  • ${file}`);
 }
@@ -334,9 +335,10 @@ function init() {
   const generated = project.writeGeneratedExamples();
   if (generated?.components.length) log(`Données d'exemple tirées des types : ${generated.components.length} composant(s) dans ${generated.file}.`);
   if (!fs.existsSync(path.join(root, project.config.runtimeConfig))) writeProviders(project, false);
-  if (project.config.routerRoot) {
+  {
     const { created } = project.generateRouteStories();
-    if (created.length) log(`${created.length} écran(s) créé(s) depuis ${project.config.routerRoot}/ dans ${path.dirname(created[0])}/.`);
+    const origin = project.config.routerRoot ? `${project.config.routerRoot}/` : 'la navigation (React Navigation)';
+    if (created.length) log(`${created.length} écran(s) créé(s) depuis ${origin} dans ${path.dirname(created[0])}/.`);
   }
 
   project.writeManifest();
