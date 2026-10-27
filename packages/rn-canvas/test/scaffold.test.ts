@@ -87,8 +87,8 @@ export default App;
 `,
   });
   assert.equal(rootLayoutFile(root, null), 'App.tsx');
-  // Corps en expression (pas de return) : rien à proposer plutôt qu'une supposition.
-  assert.equal(proposeProviders(root, 'App.tsx'), null);
+  // Corps en expression (pas de return) : le JSX renvoyé directement.
+  assert.deepEqual(proposeProviders(root, 'App.tsx')!.wrappers, ['Provider']);
   fs.writeFileSync(path.join(root, 'App.tsx'), fs.readFileSync(path.join(root, 'App.tsx'), 'utf8').replace('const App = () => (', 'function App() {\n  return (').replace(');\nexport default', ');\n}\nexport default'));
   const proposal = proposeProviders(root, 'App.tsx')!;
   assert.deepEqual(proposal.wrappers, ['Provider']);

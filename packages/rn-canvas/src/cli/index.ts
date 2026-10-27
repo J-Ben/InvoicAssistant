@@ -352,7 +352,9 @@ function init() {
   log(
     pkg.dependencies?.['expo-router']
       ? 'Lancez « npm run canvas ». Les écrans sont dans canvas/ (pas dans app/ : ce seraient des routes).'
-      : 'Créez un fichier *.canvas.tsx à côté d’un écran, puis lancez « npm run canvas ».',
+      : project.stories().length
+        ? 'Lancez « npm run canvas ». Les écrans sont dans canvas/.'
+        : 'Créez un fichier *.canvas.tsx dans canvas/ (ou à côté d’un écran), puis lancez « npm run canvas ».',
   );
 }
 

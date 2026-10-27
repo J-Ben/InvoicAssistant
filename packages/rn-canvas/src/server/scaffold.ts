@@ -90,10 +90,11 @@ export function proposeProviders(root: string, layoutFile: string, configFile = 
   const src = parse(code, layoutFile);
   const program = programOf(src.ast);
   const fn = rootComponent(program, exportName);
-  if (!fn || fn.body.type !== 'BlockStatement') return null;
+  if (!fn) return null;
 
-  const body: AstNode[] = fn.body.body;
-  const finalReturn = [...body].reverse().find((s) => s.type === 'ReturnStatement' && s.argument && isJsx(unwrap(s.argument)));
+  // `const App = () => (<…/>)` : le JSX renvoyé directement, sans corps.
+  const body: AstNode[] = fn.body.type === 'BlockStatement' ? fn.body.body : [];
+  const finalReturn = fn.body.type === 'BlockStatement' ? [...body].reverse().find((s) => s.type === 'ReturnStatement' && s.argument && isJsx(unwrap(s.argument))) : isJsx(unwrap(fn.body)) ? ({ argument: fn.body } as unknown as AstNode) : null;
   if (!finalReturn) return null;
 
   const localComponents = new Set<string>(program.body.flatMap((s: AstNode) => declaredFunctions(s)));
@@ -309,8 +310,11 @@ function rootComponent(program: AstNode, exportName = 'default'): AstNode | null
   if (wrapped) return wrapped;
   // `export default X`, `Sentry.wrap(codePush(opts)(X))`… : la première fonction du fichier citée.
   let found: AstNode | null = null;
-  walk(declaration, (n) => {
+  // Les HOC du fichier (`withObserve(App)`) sont appelés : on cherche parmi les arguments.
+  walk(declaration, (n, parents) => {
     if (found) return false;
+    const parent = parents[parents.length - 1];
+    if (parent?.type === 'CallExpression' && parent.callee === n) return;
     if (n.type === 'Identifier' && functions.has(n.name)) found = functions.get(n.name)!;
   });
   return found;

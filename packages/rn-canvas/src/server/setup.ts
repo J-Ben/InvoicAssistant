@@ -40,7 +40,7 @@ export function analyzeEntry(root: string): EntryInfo | null {
   const code = fs.readFileSync(path.join(root, file), 'utf8');
   const program = programOf(parse(code, file).ast);
   const call = registration(program);
-  const component = call?.component ?? null;
+  const component = call ? (wrappedComponent(program, call.component) ?? call.component) : null;
   let componentFile: string | null = null;
   let componentExport: string | null = null;
   if (component) {
@@ -58,20 +58,34 @@ export function analyzeEntry(root: string): EntryInfo | null {
 
 /** `registerRootComponent(App)` ou `AppRegistry.registerComponent(name, () => App)`. */
 function registration(program: AstNode): { kind: EntryInfo['kind']; node: AstNode; component: string } | null {
+  // Déjà branché : withRnCanvas(App) → App.
+  const strip = (node: AstNode) => (node.type === 'CallExpression' && node.callee.type === 'Identifier' && node.callee.name === 'withRnCanvas' && node.arguments[0] ? unwrap(node.arguments[0]) : node);
   let found: { kind: EntryInfo['kind']; node: AstNode; component: string } | null = null;
   walk(program, (n) => {
     if (found || n.type !== 'CallExpression') return;
     const callee = memberPath(n.callee);
     if ((callee === 'registerRootComponent' || callee?.endsWith('.registerRootComponent')) && n.arguments[0]) {
-      const arg = unwrap(n.arguments[0]);
+      const arg = strip(unwrap(n.arguments[0]));
       if (arg.type === 'Identifier') found = { kind: 'registerRootComponent', node: arg, component: arg.name };
     } else if (callee?.endsWith('AppRegistry.registerComponent') && n.arguments[1]) {
       const fn = unwrap(n.arguments[1]);
-      const body = fn.type === 'ArrowFunctionExpression' ? unwrap(fn.body.type === 'BlockStatement' ? returned(fn.body) ?? fn.body : fn.body) : null;
+      const body = fn.type === 'ArrowFunctionExpression' ? strip(unwrap(fn.body.type === 'BlockStatement' ? returned(fn.body) ?? fn.body : fn.body)) : null;
       if (body?.type === 'Identifier') found = { kind: 'AppRegistry', node: body, component: body.name };
     }
   });
   return found;
+}
+
+/** `const RnCanvasApp = withRnCanvas(App)` → `App`. */
+function wrappedComponent(program: AstNode, name: string): string | null {
+  for (const stmt of program.body) {
+    if (stmt.type !== 'VariableDeclaration') continue;
+    for (const d of stmt.declarations) {
+      const init = d.init && unwrap(d.init);
+      if (d.id.name === name && init?.type === 'CallExpression' && init.callee.name === 'withRnCanvas' && init.arguments[0]?.type === 'Identifier') return init.arguments[0].name;
+    }
+  }
+  return null;
 }
 
 function returned(block: AstNode): AstNode | null {
@@ -158,6 +172,9 @@ function afterImports(program: AstNode): number {
   return at;
 }
 
+/** Composant enveloppé déclaré par le branchement d'un point d'entrée AppRegistry. */
+const WRAPPED = 'RnCanvasApp';
+
 /** Branche le point d'entrée : `registerRootComponent(withRnCanvas(App))`, ou le composant renvoyé à AppRegistry. */
 export function patchEntry(code: string, file: string, manifest: string): string | null {
   if (code.includes('rn-canvas/runtime')) return null;
@@ -166,7 +183,14 @@ export function patchEntry(code: string, file: string, manifest: string): string
   if (!call) return null;
   const at = afterImports(program);
   const typed = /\.tsx?$/.test(file);
-  return `${code.slice(0, at)}\n${helper(manifest, typed)}${code.slice(at, call.node.start)}withRnCanvas(${call.component})${code.slice(call.node.end)}`;
+  const head = `${code.slice(0, at)}\n${helper(manifest, typed)}`;
+  if (call.kind === 'AppRegistry') {
+    // Le fournisseur `() => App` n'est appelé qu'au lancement de l'app, qu'Expo ne fait pas sur le
+    // web pour AppRegistry : l'enveloppe est créée avant, pour que le canevas puisse se lancer seul.
+    const stmt = program.body.find((s: AstNode) => s.start <= call.node.start && call.node.end <= s.end)!;
+    return `${head}${code.slice(at, stmt.start).replace(/^\n+/, '\n')}const ${WRAPPED} = withRnCanvas(${call.component});\n${code.slice(stmt.start, call.node.start)}${WRAPPED}${code.slice(call.node.end)}`;
+  }
+  return `${head}${code.slice(at, call.node.start).replace(/^\n+/, '\n')}withRnCanvas(${call.component})${code.slice(call.node.end)}`;
 }
 
 /** Branche la mise en page racine d'expo-router : `export default withRnCanvas(RootLayout)`. */

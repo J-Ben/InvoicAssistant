@@ -64,12 +64,15 @@ test("point d'entrée AppRegistry : composant suivi jusqu'à son fichier, branch
   assert.deepEqual(rootComponentFile(root, null), { file: 'app/app.tsx', exportName: 'default' });
 
   const patched = patchEntry(index, 'index.js', './rn-canvas.stories')!;
-  assert.match(patched, /AppRegistry\.registerComponent\(appName, \(\) => withRnCanvas\(App\)\);/);
+  assert.match(patched, /const RnCanvasApp = withRnCanvas\(App\);\nAppRegistry\.registerComponent\(appName, \(\) => RnCanvasApp\);/);
   assert.match(patched, /function withRnCanvas\(App\) \{/);
   assert.match(patched, /try \{\n {4}return require\('rn-canvas\/runtime'\)\.withCanvas\(App, \(\) => require\('\.\/rn-canvas\.stories'\)\.default\);/);
   assert.doesNotThrow(() => parse(patched, 'index.js'));
   // Déjà branché : rien à faire.
   assert.equal(patchEntry(patched, 'index.js', './rn-canvas.stories'), null);
+  // Une fois branché, le composant racine reste retrouvé (fournisseurs proposés après le branchement).
+  fs.writeFileSync(path.join(root, 'index.js'), patched);
+  assert.deepEqual(rootComponentFile(root, null), { file: 'app/app.tsx', exportName: 'default' });
 });
 
 test('point d’entrée registerRootComponent (TypeScript, guillemets doubles) et main du package.json', () => {

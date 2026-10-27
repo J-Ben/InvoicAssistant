@@ -18,15 +18,25 @@ npm i -D rn-canvas
 npx rn-canvas init
 ```
 
-`init` crée `rn-canvas.json`, ajoute le plugin à `babel.config.js`, branche le point d'entrée et ajoute le script `npm run canvas`. Il prépare aussi le canevas à partir du code existant, sans rien écraser :
+`init` crée `rn-canvas.json`, ajoute le plugin à `babel.config.js`, branche le point d'entrée (`registerRootComponent(App)` ou `AppRegistry.registerComponent(name, () => App)`, fichier donné par `main` du package.json, sinon `index.js`/`index.ts`), enveloppe `metro.config.js` et ajoute le script `npm run canvas`. Tout ce qu'il écrit reste inoffensif sans le paquet installé (collègue, CI, build natif) : les `require` de rn-canvas sont protégés par `try`, et le canevas n'existe qu'en développement web. Il prépare aussi le canevas à partir du code existant, sans rien écraser :
 
-- **Fournisseurs** : `rn-canvas.config.tsx` reprend la chaîne d'éléments qui enveloppe la navigation dans `app/_layout.tsx` (ou `App.tsx`) : thème, stores, gestes, `useFonts` et sa condition d'attente… La navigation et ce qui s'affiche à côté (splash, verrouillage, barre d'état) sont laissés de côté. Une prop calculée dans le layout (`value={client}` issu d'un hook) ne peut pas être reprise : elle est listée en tête du fichier.
-- **Écrans** (expo-router) : un fichier `canvas/<Nom>.canvas.tsx` par route de `app/`. Une route à paramètre (`[id]`) reçoit `params: { id: '1' }`, à remplacer.
+- **Fournisseurs** : `rn-canvas.config.tsx` reprend la chaîne d'éléments qui enveloppe la navigation dans `app/_layout.tsx`, ou dans le composant enregistré par le point d'entrée (`App.tsx`, `app/app.tsx`…), y compris enveloppé de HOC (`Sentry.wrap(codePush(opts)(App))`) : thème, stores, gestes, `useFonts` et sa condition d'attente… La navigation et ce qui s'affiche à côté (splash, verrouillage, barre d'état) sont laissés de côté, comme la télémétrie et les mises à jour OTA (Sentry, CodePush, OneSignal…). `PersistQueryClientProvider` devient un `QueryClientProvider` sans persistance ; les portails (`PortalHost`) restent à leur place, un toast piloté par une ref est écarté. Une prop calculée dans le layout (`value={client}` issu d'un hook) ne peut pas toujours être reprise : elle est listée en tête du fichier. Si rien n'est reconnu, un fichier à compléter est écrit, avec la raison.
+- **Écrans** : un fichier `canvas/<Nom>.canvas.tsx` par route de `app/` (expo-router), ou par `<Stack.Screen name component>` (React Navigation, voir plus bas). Un paramètre de route reçoit une valeur d'exemple (`params: { id: '1' }`), à remplacer.
 - **Données d'exemple** (TypeScript) : `canvas/examples.generated.ts`, tiré des types des props de chaque composant (voir « Aperçus des composants »).
 
 Il liste ce qu'il reste à faire, s'il y a lieu. Chaque étape se relance seule : `npx rn-canvas providers` (`--print` pour seulement afficher la proposition), `npx rn-canvas screens`, `npx rn-canvas examples`.
 
-Avec **expo-router**, `init` branche `app/_layout.tsx` (la mise en page racine) au lieu du point d'entrée, et range les stories dans `canvas/` : dans `app/`, chaque fichier deviendrait une route.
+Avec **expo-router**, `init` branche `app/_layout.tsx` (la mise en page racine) au lieu du point d'entrée, et range les stories dans `canvas/` : dans `app/`, chaque fichier deviendrait une route. **Sans expo-router**, `app/` n'est qu'un dossier de sources comme `src/` : `init` l'ajoute à `include`.
+
+### React Navigation (sans expo-router)
+
+Chaque écran du canevas est rendu dans son propre conteneur React Navigation (`NavigationIndependentTree` en v7, `independent` en v6), avec une pile à un seul écran créée par `@react-navigation/native-stack` (ou `@react-navigation/stack`) :
+
+- l'écran reçoit `navigation` et `route` en props, et `useNavigation()`/`useRoute()` fonctionnent, y compris dans les aperçus des composants ;
+- `route.params` vaut le `params` du fichier canvas (`params: { invoiceId: 'F-104' }`) ;
+- une navigation vers un autre écran (`navigate('Detail')`, `goBack()`) n'est pas jouée : l'écran reste affiché seul et l'éditeur la signale.
+
+`npx rn-canvas screens` lit les `<X.Screen name="…" component={…} />` (et `getComponent`, et l'API statique `createNativeStackNavigator({ screens })`), suit les imports et réexports jusqu'au fichier de l'écran, et tire les paramètres requis des types `…ParamList` (`InvoiceDetail: { invoiceId: string }` → `params: { invoiceId: '1' }`), sinon des `route.params.x` lus par l'écran. Si un écran plante sur `Cannot read properties of undefined (reading 'x')` sans `params` déclarés, le message d'erreur le suggère.
 
 Branchement manuel du point d'entrée, si `init` ne peut pas le faire :
 
@@ -67,7 +77,7 @@ export const AvecDonnees: CanvasStory = {
 | `parameters` | Données libres transmises au wrapper, comme les paramètres de route |
 | `wrapper` | Fournisseurs propres à la variante, à l'intérieur de ceux de `rn-canvas.config.tsx` : ils peuvent utiliser les hooks de l'app |
 | `storage` | Stockage du navigateur (localStorage, donc AsyncStorage sur le web) restauré avant le rendu. Écrit par l'éditeur avec « ＋ » |
-| `params` | Paramètres de route lus par `useLocalSearchParams()` (expo-router), dans la variante ou l'export par défaut : `{ id: '42' }` |
+| `params` | Paramètres de route, dans la variante ou l'export par défaut : `{ id: '42' }`. Lus par `useLocalSearchParams()` (expo-router) ou `route.params` / `useRoute()` (React Navigation) |
 
 Un paramètre connu seulement au rendu (l'identifiant d'une facture créée par `CanvasSeed`) se passe avec `<RouteParams params={{ id }}><Screen /></RouteParams>` dans un `render`.
 
@@ -177,7 +187,7 @@ Si l'éditeur est ouvert en même temps, il affiche les modifications de l'IA en
 ```json
 {
   "appUrl": "http://localhost:8081",
-  "include": ["src"],
+  "include": ["src", "canvas"],
   "theme": { "file": "src/theme/colors.ts", "export": "colors", "alias": "colors" },
   "isolateStories": true
 }
@@ -190,6 +200,10 @@ Si l'éditeur est ouvert en même temps, il affiche les modifications de l'IA en
 `board` (par défaut `canvas/parcours.json`, ou `rn-canvas.board.json` sans dossier `canvas/`) : fichier des pages, parcours, groupes et notes du canevas.
 
 `ignoreRoutes` : routes sans interface (redirections…) que l'onglet Écrans et `rn-canvas screens` ne proposent pas, ex. `["app/budget/review.tsx"]`. L'onglet Écrans signale les autres routes sans fichier canvas, avec un bouton pour les créer.
+
+`shims` : remplacements web propres au projet, `{ "module": "chemin/du/remplacement.js" }` (ou `false` pour désactiver un remplacement intégré). Actifs seulement dans le canevas (`RN_CANVAS=1`).
+
+**Remplacements web.** rn-canvas remplace déjà dans le canevas les modules natifs courants sans version web (expo-notifications, expo-secure-store, expo-file-system, ML Kit, notifee, CodePush, OneSignal, Sentry…). `npx rn-canvas doctor` signale les autres modules natifs importés par l'app, et `npx rn-canvas shim <module>` en crée un remplacement inoffensif dans `canvas/shims/` (toute propriété, à toute profondeur, est une fonction sans effet ; un HOC renvoie le composant reçu), avec la liste des exports trouvés dans ses types pour décrire au besoin des valeurs plus parlantes. iOS, Android et le build web habituel utilisent toujours le vrai module. Un `metro.config.js` qui remplace déjà le module pour le web (`resolveRequest`) est reconnu par `doctor`.
 
 `isolateStories` (activé par défaut si l'app tourne sur `localhost`) : chaque écran est servi depuis son propre sous-domaine (`accueil-actuel-1k2j.localhost:8081`), que les navigateurs résolvent vers la machine locale. Chaque écran a ainsi son propre stockage (localStorage, IndexedDB, OPFS) : pas de conflit entre écrans affichés en parallèle, ce qui est indispensable pour expo-sqlite sur le web, dont la base ne s'ouvre que dans un seul onglet à la fois.
 
@@ -210,7 +224,7 @@ Le serveur n'écoute que sur `127.0.0.1` et refuse les requêtes d'autres origin
 - Un écran est affiché sans ses layouts (barre d'onglets, en-tête de pile) : ajoutez-les au besoin par un `wrapper` dans le fichier canvas.
 - Les modifications de structure ne concernent que les enfants directs d'un élément JSX. Un élément affiché sous condition (`{cond && <X />}`), dans une liste (`.map`) ou à la racine d'un composant se modifie dans le code.
 - Les déplacements se font dans un même fichier. Pour sortir un élément d'un composant, il faut passer par le code.
-- Seuls les modules qui fonctionnent sur le web peuvent s'afficher. Les autres (notifications, système de fichiers, widgets…) doivent être neutralisés sur le web : `Platform.OS === 'web'`, fichier `.web.ts`, ou simulation dans `setup` ou dans le wrapper.
+- Seuls les modules qui fonctionnent sur le web peuvent s'afficher. Les autres (notifications, système de fichiers, widgets…) doivent être neutralisés sur le web : `npx rn-canvas shim <module>` (voir « Remplacements web »), `Platform.OS === 'web'`, fichier `.web.ts`, ou simulation dans `setup` ou dans le wrapper.
 
 ## Publication
 

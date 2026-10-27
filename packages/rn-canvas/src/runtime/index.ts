@@ -5,7 +5,7 @@
  * invisible dans l'arbre des calques.
  */
 import { type ComponentType, createElement } from 'react';
-import { Platform } from 'react-native';
+import { AppRegistry, Platform } from 'react-native';
 import { GALLERY_PARAM } from '../shared/protocol';
 import { CanvasHost } from './CanvasHost';
 import { GalleryHost } from './gallery';
@@ -27,13 +27,29 @@ export function withCanvas<P extends object>(App: ComponentType<P>, loadManifest
   const params = new URLSearchParams(window.location.search);
   // Aperçus de la bibliothèque, demandés par la barre de l'éditeur.
   if (params.has(GALLERY_PARAM)) {
-    return function RnCanvasGallery() {
+    return ensureMounted(function RnCanvasGallery() {
       return createElement(GalleryHost, { loadManifest });
-    };
+    });
   }
   const storyId = params.get(STORY_PARAM);
   if (!storyId) return App;
-  return function RnCanvasRoot() {
+  return ensureMounted(function RnCanvasRoot() {
     return createElement(CanvasHost, { storyId, loadManifest });
-  };
+  });
+}
+
+/**
+ * Sur le web, Expo ne lance l'app que pour `registerRootComponent` : un point d'entrée qui fait
+ * seulement `AppRegistry.registerComponent(name, () => App)` (projet React Native CLI) n'affiche
+ * rien. Dans le canevas, si personne n'a monté d'arbre React dans #root, on y lance l'écran.
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function ensureMounted<C extends ComponentType<any>>(Root: C): C {
+  setTimeout(() => {
+    const rootTag = document.getElementById('root');
+    if (!rootTag || rootTag.hasChildNodes() || Object.keys(rootTag).some((k) => k.startsWith('__reactContainer'))) return;
+    AppRegistry.registerComponent('rn-canvas', () => Root);
+    AppRegistry.runApplication('rn-canvas', { rootTag } as unknown as Parameters<typeof AppRegistry.runApplication>[1]);
+  }, 0);
+  return Root;
 }
