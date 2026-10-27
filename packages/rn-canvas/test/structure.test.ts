@@ -169,3 +169,14 @@ test('JSX inséré : enfants obligatoires', async () => {
   assert.equal(componentJsx('AppText', [{ name: 'children', type: 'unknown' }]), '<AppText>Nouveau texte</AppText>');
   assert.equal(componentJsx('Card', [{ name: 'children', type: 'unknown' }, { name: 'title', type: 'string' }]), '<Card title="Title">{null}</Card>');
 });
+
+test('insertion après un élément conditionnel : après le bloc {cond && …}', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'rnc-cond-'));
+  fs.mkdirSync(path.join(root, 'src'));
+  fs.writeFileSync(path.join(root, 'rn-canvas.json'), JSON.stringify({ include: ['src'] }));
+  const code = `import { View, Text } from 'react-native';\n\nexport const A = ({ empty }) => (\n  <View>\n    {empty && (\n      <Text>Vide</Text>\n    )}\n  </View>\n);\n`;
+  fs.writeFileSync(path.join(root, 'src/A.tsx'), code);
+  const project = new Project(root);
+  project.edit({ op: 'insert', loc: 'src/A.tsx:6:6', name: 'Text', position: 'after', component: { name: 'View', file: null } });
+  assert.equal(fs.readFileSync(path.join(root, 'src/A.tsx'), 'utf8'), code.replace('    )}\n', '    )}\n    <View />\n'));
+});

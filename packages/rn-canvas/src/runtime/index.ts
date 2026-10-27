@@ -6,7 +6,9 @@
  */
 import { type ComponentType, createElement } from 'react';
 import { Platform } from 'react-native';
+import { GALLERY_PARAM } from '../shared/protocol';
 import { CanvasHost } from './CanvasHost';
+import { GalleryHost } from './gallery';
 import type { CanvasManifest } from './types';
 
 export type { CanvasManifest, CanvasMeta, CanvasRuntimeConfig, CanvasStory, CanvasStoryObject, CanvasWrapperProps } from './types';
@@ -21,7 +23,14 @@ export const STORY_PARAM = 'rnc-story';
  */
 export function withCanvas<P extends object>(App: ComponentType<P>, loadManifest: () => CanvasManifest): ComponentType<P> {
   if (Platform.OS !== 'web' || typeof window === 'undefined') return App;
-  const storyId = new URLSearchParams(window.location.search).get(STORY_PARAM);
+  const params = new URLSearchParams(window.location.search);
+  // Aperçus de la bibliothèque, demandés par la barre de l'éditeur.
+  if (params.has(GALLERY_PARAM)) {
+    return function RnCanvasGallery() {
+      return createElement(GalleryHost, { loadManifest });
+    };
+  }
+  const storyId = params.get(STORY_PARAM);
   if (!storyId) return App;
   return function RnCanvasRoot() {
     return createElement(CanvasHost, { storyId, loadManifest });

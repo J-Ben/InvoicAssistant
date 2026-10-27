@@ -159,6 +159,11 @@ export class Project {
     const entries = this.canvasFiles()
       .map((file) => `    ${JSON.stringify(file)}: () => require(${JSON.stringify(importPath(file))}),`)
       .join('\n');
+    // Composants de la bibliothèque, chargés à la demande pour leurs aperçus.
+    const components = this.components()
+      .filter((c) => c.file)
+      .map((c) => `    ${JSON.stringify(`${c.file}#${c.name}`)}: () => require(${JSON.stringify(importPath(c.file!))}).${c.name},`)
+      .join('\n');
 
     const content = `/* eslint-disable */
 // Fichier généré par rn-canvas : ne pas modifier à la main (\`npx rn-canvas generate\`).
@@ -168,6 +173,9 @@ const manifest: CanvasManifest = {
   config: ${runtimeConfig},${router}
   files: {
 ${entries}
+  },
+  components: {
+${components}
   },
 };
 

@@ -88,7 +88,7 @@ const NAVIGATION_METHODS = ['navigate', 'push', 'replace', 'back', 'goBack', 'di
  * changerait l'URL de l'iframe et la ferait recharger en boucle. La demande est signalée à l'éditeur.
  */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-function neutralizeRouter(router: Record<string, any>, storyId: string) {
+export function neutralizeRouter(router: Record<string, any>, storyId: string) {
   // expo-router rebranche ses méthodes (Object.assign) après le premier rendu : des accesseurs
   // dont l'écriture est ignorée gardent la version neutre.
   const pin = (key: string, value: unknown) => Object.defineProperty(router, key, { get: () => value, set: () => {}, configurable: true, enumerable: true });

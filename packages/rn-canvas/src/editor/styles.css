@@ -286,3 +286,10 @@ textarea { resize: vertical; }
 .library-separator { width: 1px; height: 20px; margin: 0 4px; background: var(--border); }
 .library-popover { position: absolute; bottom: calc(100% + 8px); left: 50%; transform: translateX(-50%); width: 320px; max-height: 420px; display: flex; flex-direction: column; padding: 8px; border-radius: 12px; background: var(--panel); border: 1px solid var(--border); box-shadow: 0 12px 32px rgb(0 0 0 / 0.2); }
 .library-items { overflow: auto; }
+.library-popover[hidden], .library-gallery[hidden] { display: none; }
+.library-popover.wide { width: min(640px, calc(100vw - 32px)); max-height: none; }
+.library-popover-head { display: flex; gap: 8px; align-items: center; }
+.library-popover-head .search { flex: 1; margin: 0; }
+.library-gallery { position: relative; height: 420px; margin: 0 -8px -8px; border-top: 1px solid var(--border); border-radius: 0 0 12px 12px; overflow: hidden; background: #fff; }
+.library-gallery iframe { width: 100%; height: 100%; border: 0; display: block; }
+.library-gallery.panel-gallery { height: calc(100vh - 230px); min-height: 300px; margin: 4px 0 0; border: 1px solid var(--border); border-radius: 8px; }

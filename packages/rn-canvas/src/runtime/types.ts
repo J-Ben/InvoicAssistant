@@ -56,4 +56,7 @@ export interface CanvasManifest {
   router?: Record<string, any>;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   files: Record<string, () => any>;
+  /** Composants de la bibliothèque (`fichier#Nom`), pour leurs aperçus dans l'éditeur. */
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  components?: Record<string, () => any>;
 }

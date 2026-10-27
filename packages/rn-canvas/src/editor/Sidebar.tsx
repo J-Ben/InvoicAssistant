@@ -1,7 +1,8 @@
-import { useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import type { ComponentEntry, EditRequest, InsertPosition, LayerNode, ProjectInfo } from '../shared/protocol.ts';
 import type { Selection } from './App.tsx';
 import { ColorInput, CommitInput } from './fields.tsx';
+import { GalleryFrame, ViewToggle, useLibraryView } from './GalleryFrame.tsx';
 import { displayValue, toHex } from './values.ts';
 
 interface Props {
@@ -231,6 +232,12 @@ function Layer({ node, depth, selectedLoc, onSelect, onHover, onDrop }: LayerPro
 
 function Components({ project, selection, onEdit }: Props) {
   const [query, setQuery] = useState('');
+  const [view, setView] = useLibraryView('rn-canvas:library-view:panel');
+  // Le cadre des aperçus, une fois chargé, reste monté même en vue Liste (son chargement est long).
+  const [galleryWanted, setGalleryWanted] = useState(view === 'previews');
+  useEffect(() => {
+    if (view === 'previews') setGalleryWanted(true);
+  }, [view]);
   const groups = new Map<string, ComponentEntry[]>();
   for (const c of project.components) {
     if (query && !c.name.toLowerCase().includes(query.toLowerCase())) continue;
@@ -245,15 +252,29 @@ function Components({ project, selection, onEdit }: Props) {
     onEdit({ op: 'insert', loc, name, position, component: { name: c.name, file: c.file } });
   };
 
+  // Aperçus : composants du projet (les primitives React Native n'en ont pas besoin). Même liste =
+  // même tableau, pour ne pas renvoyer la liste au cadre à chaque rendu.
+  const previewKeys = [...groups.values()].flat().filter((c) => c.file).map((c) => `${c.file}#${c.name}`).join('|');
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const previewed = useMemo(() => [...groups.values()].flat().filter((c) => c.file), [previewKeys]);
+
   return (
     <>
-      <input className="search" placeholder="Rechercher un composant" value={query} onChange={(e) => setQuery(e.target.value)} />
+      <div className="library-popover-head">
+        <input className="search" placeholder="Rechercher un composant" value={query} onChange={(e) => setQuery(e.target.value)} />
+        <ViewToggle view={view} onChange={setView} />
+      </div>
       <p className="hint small">
         {selection
-          ? `Cliquez pour insérer ${CONTAINERS.has(selection.info.name) ? 'dans' : 'après'} <${selection.info.name}>, ou glissez vers les calques.`
-          : 'Sélectionnez un élément, ou glissez un composant vers les calques.'}
+          ? `Cliquez pour insérer ${CONTAINERS.has(selection.info.name) ? 'dans' : 'après'} <${selection.info.name}>${view === 'list' ? ', ou glissez vers les calques ou un écran' : ''}.`
+          : view === 'list'
+            ? 'Sélectionnez un élément, ou glissez un composant vers les calques ou un écran.'
+            : "Sélectionnez d'abord un élément, puis cliquez sur un aperçu pour l'insérer."}
       </p>
-      {[...groups].map(([group, items]) => (
+      {galleryWanted && (
+        <GalleryFrame name="panel" className="panel-gallery" appUrl={project.appUrl} isolateStories={project.isolateStories} components={previewed} onPick={insert} hidden={view !== 'previews'} />
+      )}
+      {view === 'list' && [...groups].map(([group, items]) => (
         <div key={group} className="group">
           <div className="group-title">{group}</div>
           {items.map((c) => (

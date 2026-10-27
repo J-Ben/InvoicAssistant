@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { ComponentEntry } from '../shared/protocol.ts';
+import { GalleryFrame, ViewToggle, componentKey, useLibraryView } from './GalleryFrame.tsx';
 import { endComponentDrag, startComponentDrag } from './Sidebar.tsx';
 
 /** Outils rapides : le composant du projet s'il existe (AppText, Button…), sinon la primitive React Native. */
@@ -22,12 +23,17 @@ interface Props {
   /** Où le composant sera inséré (affiché en info-bulle) ; null : rien de sélectionné ni d'écran actif. */
   target: string | null;
   onInsert: (component: ComponentEntry) => void;
+  appUrl: string;
+  isolateStories: boolean;
 }
 
 /** Barre flottante en bas du canevas : ajouter du texte, un bouton… ou un composant de la bibliothèque. */
-export function LibraryBar({ components, target, onInsert }: Props) {
+export function LibraryBar({ components, target, onInsert, appUrl, isolateStories }: Props) {
   const [open, setOpen] = useState<string | null>(null);
   const [query, setQuery] = useState('');
+  const [view, setView] = useLibraryView('rn-canvas:library-view:bar');
+  // Cadre des aperçus : chargé à la première ouverture d'un menu, puis gardé (le chargement de l'app est long).
+  const [galleryWanted, setGalleryWanted] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
 
   const quick = useMemo(
@@ -46,7 +52,7 @@ export function LibraryBar({ components, target, onInsert }: Props) {
     return others.length ? [...known, { key: '*', label: 'Autres', items: others }] : known;
   }, [components]);
 
-  // Fermeture au clic ailleurs ou avec Échap.
+  // Fermeture au clic ailleurs ou avec Échap (un clic dans le cadre des aperçus n'arrive pas ici).
   useEffect(() => {
     if (!open) return;
     const close = (e: Event) => {
@@ -68,7 +74,8 @@ export function LibraryBar({ components, target, onInsert }: Props) {
     onInsert(c);
   };
   const current = groups.find((g) => g.key === open);
-  const items = current?.items.filter((c) => !query || c.name.toLowerCase().includes(query.toLowerCase())) ?? [];
+  const items = useMemo(() => current?.items.filter((c) => !query || c.name.toLowerCase().includes(query.toLowerCase())) ?? [], [current, query]);
+  const showPreviews = Boolean(current) && view === 'previews';
 
   return (
     <div className="library-bar" ref={ref} onPointerDown={(e) => e.stopPropagation()}>
@@ -95,37 +102,51 @@ export function LibraryBar({ components, target, onInsert }: Props) {
           aria-expanded={open === g.key}
           onClick={() => {
             setQuery('');
+            setGalleryWanted(true);
             setOpen(open === g.key ? null : g.key);
           }}
         >
           {g.label} <span className="muted">{g.items.length}</span> ▴
         </button>
       ))}
-      {current && (
-        <div className="library-popover" role="menu">
-          <input className="search" autoFocus placeholder={`Rechercher dans ${current.label.toLowerCase()}`} value={query} onChange={(e) => setQuery(e.target.value)} />
-          <p className="hint small">{disabled ? "Cliquez d'abord sur un écran ou un élément, ou glissez un composant sur un écran." : `Clic : ${hint.toLowerCase()} · ou glissez-le sur un écran.`}</p>
-          <div className="library-items">
-            {items.map((c) => (
-              <button
-                key={`${c.file}:${c.name}`}
-                className="component-item"
-                role="menuitem"
-                draggable
-                aria-disabled={disabled}
-                onDragStart={(e) => startComponentDrag(e, c)}
-                onDragEnd={endComponentDrag}
-                onClick={() => insert(c)}
-                title={c.file ?? 'react-native'}
-              >
-                <span className="component">◇ {c.name}</span>
-                {c.props.length > 0 && <span className="muted small">{c.props.map((p) => p.name).join(', ')}</span>}
-              </button>
-            ))}
-            {items.length === 0 && <p className="hint small">Aucun composant.</p>}
-          </div>
-        </div>
-      )}
+      <div className={`library-popover ${showPreviews ? 'wide' : ''}`} role="menu" hidden={!current}>
+        {current && (
+          <>
+            <div className="library-popover-head">
+              <input className="search" autoFocus placeholder={`Rechercher dans ${current.label.toLowerCase()}`} value={query} onChange={(e) => setQuery(e.target.value)} />
+              <ViewToggle view={view} onChange={setView} />
+            </div>
+            <p className="hint small">
+              {disabled
+                ? "Cliquez d'abord sur un écran ou un élément, ou glissez un composant (vue Liste) sur un écran."
+                : `Clic : ${hint.charAt(0).toLowerCase()}${hint.slice(1)}${view === 'list' ? ' · ou glissez-le sur un écran' : ''}.`}
+            </p>
+            {view === 'list' && (
+              <div className="library-items">
+                {items.map((c) => (
+                  <button
+                    key={componentKey(c)}
+                    className="component-item"
+                    role="menuitem"
+                    draggable
+                    aria-disabled={disabled}
+                    onDragStart={(e) => startComponentDrag(e, c)}
+                    onDragEnd={endComponentDrag}
+                    onClick={() => insert(c)}
+                    title={c.file ?? 'react-native'}
+                  >
+                    <span className="component">◇ {c.name}</span>
+                    {c.props.length > 0 && <span className="muted small">{c.props.map((p) => p.name).join(', ')}</span>}
+                  </button>
+                ))}
+                {items.length === 0 && <p className="hint small">Aucun composant.</p>}
+              </div>
+            )}
+          </>
+        )}
+        {/* Toujours monté une fois demandé : seul son affichage suit le menu et la vue choisie. */}
+        {galleryWanted && <GalleryFrame name="bar" appUrl={appUrl} isolateStories={isolateStories} components={items} onPick={insert} hidden={!showPreviews} />}
+      </div>
     </div>
   );
 }

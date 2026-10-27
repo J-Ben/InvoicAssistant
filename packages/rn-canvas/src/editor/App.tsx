@@ -552,7 +552,7 @@ export function App() {
           onActivate={setActiveStory}
           empty={stories.length === 0}
         >
-          <LibraryBar components={project.components} target={insertTargetLabel} onInsert={insertComponent} />
+          <LibraryBar components={project.components} target={insertTargetLabel} onInsert={insertComponent} appUrl={project.appUrl} isolateStories={project.isolateStories} />
         </Canvas>
       )}
 

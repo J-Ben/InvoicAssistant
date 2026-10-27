@@ -27,6 +27,19 @@ export function parentOf(ast: AstNode, node: AstNode): AstNode | null {
   return parent;
 }
 
+/** L'élément, ou le bloc `{…}` qui le contient, enfant direct d'un élément JSX. */
+function siblingAnchor(ast: AstNode, element: AstNode): AstNode {
+  let node = element;
+  for (;;) {
+    const parent = parentOf(ast, node);
+    if (!parent) return element;
+    if (parent.type === 'JSXElement' || parent.type === 'JSXFragment') return node;
+    // Racine d'un composant (return, flèche…) : pas de frère possible, l'erreur sera expliquée plus loin.
+    if (/Function|ReturnStatement|VariableDeclarator|Program/.test(parent.type)) return element;
+    node = parent;
+  }
+}
+
 /** Un élément n'est déplaçable/supprimable que s'il est l'enfant direct d'un autre élément JSX. */
 function assertJsxChild(ast: AstNode, element: AstNode, action: string): AstNode {
   const parent = parentOf(ast, element);
@@ -81,6 +94,9 @@ export function insertion(src: SourceFile, target: AstNode, position: InsertPosi
   const unit = indentUnit(code);
 
   if (position === 'before' || position === 'after') {
+    // Élément dans une condition ou une liste (`{cond && <X />}`, `{items.map(…)}`) : à côté du bloc
+    // entier, sinon le JSX serait invalide (deux éléments adjacents sans parent).
+    target = siblingAnchor(src.ast, target);
     if (!ownsLine(code, target)) {
       return position === 'before' ? { start: target.start, end: target.start, text: block, offset: 0 } : { start: target.end, end: target.end, text: block, offset: 0 };
     }

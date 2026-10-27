@@ -74,7 +74,22 @@ export type RuntimeMessage =
   /** ⌘/Ctrl + molette au-dessus de l'écran (zoom du canevas) ; x, y dans l'écran. */
   | { source: 'rn-canvas'; type: 'wheel'; story: string; deltaX: number; deltaY: number; x: number; y: number; metaKey: boolean; ctrlKey: boolean }
   /** Raccourci clavier tapé pendant que le focus est dans l'écran (relayé à l'éditeur). */
-  | { source: 'rn-canvas'; type: 'key'; story: string; key: string; metaKey: boolean; ctrlKey: boolean; shiftKey: boolean; altKey: boolean };
+  | { source: 'rn-canvas'; type: 'key'; story: string; key: string; metaKey: boolean; ctrlKey: boolean; shiftKey: boolean; altKey: boolean }
+  /** Cadre des aperçus de la bibliothèque prêt à recevoir sa liste (`gallery`). */
+  | { source: 'rn-canvas'; type: 'gallery-ready'; story: string }
+  /** Clic sur un aperçu : composant à insérer (`fichier#Nom`). */
+  | { source: 'rn-canvas'; type: 'pick'; story: string; key: string };
+
+/** Composant à prévisualiser dans le cadre des aperçus. */
+export interface GalleryItem {
+  /** `fichier#Nom`, clé du manifeste. */
+  key: string;
+  name: string;
+  props: { name: string; type: 'string' | 'number' | 'boolean' | 'function' | 'array' | 'unknown' }[];
+}
+
+/** Paramètre d'URL qui affiche les aperçus de la bibliothèque au lieu d'un écran. */
+export const GALLERY_PARAM = 'rnc-gallery';
 
 export type CanvasMode = 'inspect' | 'interact';
 
@@ -90,7 +105,9 @@ export type EditorMessage =
   /** Demande le contenu du stockage de l'écran (pour l'enregistrer comme variante). */
   | { source: 'rn-canvas-editor'; type: 'snapshot'; requestId: number }
   /** Position des éléments donnés (mode Flux) : réponse `measured`, éléments visibles seulement. */
-  | { source: 'rn-canvas-editor'; type: 'measure'; requestId: number; locs: Loc[] };
+  | { source: 'rn-canvas-editor'; type: 'measure'; requestId: number; locs: Loc[] }
+  /** Composants à afficher dans le cadre des aperçus. */
+  | { source: 'rn-canvas-editor'; type: 'gallery'; items: GalleryItem[] };
 
 /** Lien de navigation lu dans le code (mode Flux). */
 export interface FlowLink {
