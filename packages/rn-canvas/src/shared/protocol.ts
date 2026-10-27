@@ -280,3 +280,86 @@ export interface ProjectInfo {
   stories: StoryGroup[];
   components: ComponentEntry[];
 }
+
+// ---- Pages, parcours, groupes et notes (fichier canvas/parcours.json) ----
+
+export interface BoardPoint {
+  x: number;
+  y: number;
+}
+
+/** Cadre de couleur titré : les écrans et notes dont le centre est dedans en font partie. */
+export interface BoardGroup {
+  id: string;
+  name: string;
+  color: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+export interface BoardNote {
+  id: string;
+  text: string;
+  x: number;
+  y: number;
+  width: number;
+  color: string;
+}
+
+/**
+ * Une page du canevas. La vue d'ensemble (`stories: null`) montre tous les écrans ; un parcours en
+ * reprend une sélection, avec sa propre disposition, sans rien changer à la vue d'ensemble.
+ */
+export interface BoardPage {
+  id: string;
+  name: string;
+  stories: string[] | null;
+  positions: Record<string, BoardPoint>;
+  groups: BoardGroup[];
+  notes: BoardNote[];
+}
+
+export interface Board {
+  version: 1;
+  pages: BoardPage[];
+}
+
+export const OVERVIEW_PAGE = 'overview';
+
+export function emptyBoard(): Board {
+  return { version: 1, pages: [{ id: OVERVIEW_PAGE, name: "Vue d'ensemble", stories: null, positions: {}, groups: [], notes: [] }] };
+}
+
+const finite = (v: unknown, fallback = 0) => (typeof v === 'number' && Number.isFinite(v) ? Math.round(v) : fallback);
+const text = (v: unknown, max: number, fallback = '') => (typeof v === 'string' ? v.slice(0, max) : fallback);
+const list = (v: unknown): unknown[] => (Array.isArray(v) ? v : []);
+const record = (v: unknown): Record<string, unknown> => (v && typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, unknown>) : {});
+
+/** Remet en forme un plan lu dans un fichier ou reçu de l'éditeur (champs manquants, types, tailles). */
+export function normalizeBoard(input: unknown): Board {
+  const pages = list(record(input).pages).slice(0, 200).map((raw): BoardPage => {
+    const p = record(raw);
+    const positions: Record<string, BoardPoint> = {};
+    for (const [id, point] of Object.entries(record(p.positions))) positions[id.slice(0, 500)] = { x: finite(record(point).x), y: finite(record(point).y) };
+    return {
+      id: text(p.id, 64) || Math.random().toString(36).slice(2, 10),
+      name: text(p.name, 120, 'Parcours'),
+      stories: p.stories === null || p.stories === undefined ? null : list(p.stories).filter((s): s is string => typeof s === 'string').map((s) => s.slice(0, 500)),
+      positions,
+      groups: list(p.groups).slice(0, 500).map((g) => {
+        const r = record(g);
+        return { id: text(r.id, 64) || Math.random().toString(36).slice(2, 10), name: text(r.name, 120, 'Groupe'), color: text(r.color, 32, 'violet'), x: finite(r.x), y: finite(r.y), width: Math.max(200, finite(r.width, 900)), height: Math.max(120, finite(r.height, 1000)) };
+      }),
+      notes: list(p.notes).slice(0, 1000).map((n) => {
+        const r = record(n);
+        return { id: text(r.id, 64) || Math.random().toString(36).slice(2, 10), text: text(r.text, 5000), x: finite(r.x), y: finite(r.y), width: Math.max(120, finite(r.width, 280)), color: text(r.color, 32, 'yellow') };
+      }),
+    };
+  });
+  const overview = pages.find((p) => p.id === OVERVIEW_PAGE);
+  if (overview) overview.stories = null;
+  else pages.unshift(emptyBoard().pages[0]);
+  return { version: 1, pages: [pages.find((p) => p.id === OVERVIEW_PAGE)!, ...pages.filter((p) => p.id !== OVERVIEW_PAGE)] };
+}

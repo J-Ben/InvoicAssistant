@@ -18,7 +18,13 @@ npm i -D rn-canvas
 npx rn-canvas init
 ```
 
-`init` crée `rn-canvas.json`, ajoute le plugin à `babel.config.js`, branche le point d'entrée et ajoute le script `npm run canvas`. Il liste ce qu'il reste à faire, s'il y a lieu.
+`init` crée `rn-canvas.json`, ajoute le plugin à `babel.config.js`, branche le point d'entrée et ajoute le script `npm run canvas`. Il prépare aussi le canevas à partir du code existant, sans rien écraser :
+
+- **Fournisseurs** : `rn-canvas.config.tsx` reprend la chaîne d'éléments qui enveloppe la navigation dans `app/_layout.tsx` (ou `App.tsx`) : thème, stores, gestes, `useFonts` et sa condition d'attente… La navigation et ce qui s'affiche à côté (splash, verrouillage, barre d'état) sont laissés de côté. Une prop calculée dans le layout (`value={client}` issu d'un hook) ne peut pas être reprise : elle est listée en tête du fichier.
+- **Écrans** (expo-router) : un fichier `canvas/<Nom>.canvas.tsx` par route de `app/`. Une route à paramètre (`[id]`) reçoit `params: { id: '1' }`, à remplacer.
+- **Données d'exemple** (TypeScript) : `canvas/examples.generated.ts`, tiré des types des props de chaque composant (voir « Aperçus des composants »).
+
+Il liste ce qu'il reste à faire, s'il y a lieu. Chaque étape se relance seule : `npx rn-canvas providers` (`--print` pour seulement afficher la proposition), `npx rn-canvas screens`, `npx rn-canvas examples`.
 
 Avec **expo-router**, `init` branche `app/_layout.tsx` (la mise en page racine) au lieu du point d'entrée, et range les stories dans `canvas/` : dans `app/`, chaque fichier deviendrait une route.
 
@@ -61,6 +67,9 @@ export const AvecDonnees: CanvasStory = {
 | `parameters` | Données libres transmises au wrapper, comme les paramètres de route |
 | `wrapper` | Fournisseurs propres à la variante, à l'intérieur de ceux de `rn-canvas.config.tsx` : ils peuvent utiliser les hooks de l'app |
 | `storage` | Stockage du navigateur (localStorage, donc AsyncStorage sur le web) restauré avant le rendu. Écrit par l'éditeur avec « ＋ » |
+| `params` | Paramètres de route lus par `useLocalSearchParams()` (expo-router), dans la variante ou l'export par défaut : `{ id: '42' }` |
+
+Un paramètre connu seulement au rendu (l'identifiant d'une facture créée par `CanvasSeed`) se passe avec `<RouteParams params={{ id }}><Screen /></RouteParams>` dans un `render`.
 
 **Variantes pré-remplies.** Deux façons d'afficher un écran dans un état précis (vide, chargé, erreur…) sans repasser par le mode Interaction :
 
@@ -109,6 +118,11 @@ Ouvrez **http://localhost:7007**.
 - **Composants** : l'onglet liste les composants exportés par le projet et quelques primitives React Native. Un clic insère le composant dans l'élément sélectionné (s'il s'agit d'un conteneur) ou juste après ; on peut aussi le **glisser sur l'écran** ou vers les calques. L'import est ajouté, et les props obligatoires (lues dans l'interface `NomProps`) reçoivent des valeurs d'exemple.
 - **Thème de l'éditeur** : le bouton Système / Clair / Sombre de la barre du haut. Le choix est mémorisé dans le navigateur.
 - **Flux** (projets expo-router) : le bouton ⇢ Flux dessine les liens de navigation lus dans le code (`router.push/replace/navigate`, `<Link href>`), du bouton exact vers l'écran visé. Survolez un écran pour mettre ses liens en avant. La légende compte les liens vers des écrans absents du canevas et les boutons non affichés dans l'état actuel (liste vide…). Une cible calculée (`router.push(route)`) n'est pas lisible dans le code et n'apparaît pas.
+- **Pages et parcours** : les onglets en haut à gauche du canevas. La **vue d'ensemble** montre tous les écrans ; **＋ Parcours** crée une page qui n'en reprend qu'une sélection (cochez-les dans l'onglet Écrans), avec sa propre disposition, ses groupes et ses notes : ranger un parcours ne change jamais la vue d'ensemble. Double-clic sur un onglet pour le renommer.
+- **Groupes** (▢ Groupe) : un cadre de couleur titré, autour de l'écran actif ou au centre de la vue. Les écrans et notes dont le centre est dedans en font partie : glisser le titre déplace le groupe avec son contenu, le coin le redimensionne. Double-clic sur le titre pour le renommer ; boutons pour la couleur, la suppression (les écrans restent) et « ⇢ Parcours », qui crée un parcours avec les écrans du groupe.
+- **Notes** (✎ Note) : un bloc de texte libre. Double-clic pour l'écrire, glisser pour la déplacer, bord droit pour l'élargir.
+- **Flux et groupes** : quand la page a des groupes, la légende du mode Flux propose **Tous les liens**, **Dans les groupes** (seulement entre écrans d'un même groupe ; les sorties sont résumées sur chaque groupe : « → Budget · 3 ») et **Entre groupes** (une flèche par paire de groupes, avec le nombre de liens).
+- Pages, groupes et notes sont enregistrés dans `canvas/parcours.json` (option `board`), à versionner avec le projet : toute l'équipe retrouve les mêmes parcours.
 - **Barre de la bibliothèque** (en bas du canevas) : Texte, Bouton, Champ et Conteneur (composants du projet comme `AppText`, `Button`, `Input` s'ils existent, sinon les primitives React Native), puis les atomes, molécules, organismes et autres composants du projet, avec recherche. Un clic insère dans l'élément sélectionné (conteneur) ou juste après, sinon dans l'écran actif ; on peut aussi glisser sur un écran.
 - **Aperçus des composants** : l'onglet Composants et les menus de la barre montrent le rendu réel de chaque composant (bascule Aperçus / Liste). Pour ceux qui exigent des données (une facture, une ligne de budget…), déclarez des exemples dans `rn-canvas.config.tsx` :
 
@@ -125,11 +139,13 @@ Ouvrez **http://localhost:7007**.
   };
   ```
 
-  Chaque exemple donne une vignette ; ses props remplacent les valeurs génériques (« Label », 0…). Les modales et panneaux qui s'affichent par-dessus l'écran n'ont pas d'aperçu en vignette : leur bouton **Ouvrir en grand** crée l'écran `canvas/components/<Nom>.canvas.tsx` (s'il n'existe pas), qui affiche le composant ouvert, en taille réelle, avec son exemple (`example: '<Nom>'` dans le `default`, `example: 'variante'` dans une story pour en choisir une). Les panneaux pilotés par ref (`BottomSheetModal` de @gorhom…) sont ouverts automatiquement (`present()`).
+  Chaque exemple donne une vignette ; ses props remplacent les valeurs génériques (« Label », 0…).
+
+  Pour ne pas tout écrire à la main, `npx rn-canvas examples` (lancé aussi par `init`) génère `canvas/examples.generated.ts` à partir des **types TypeScript** des props, avec le compilateur du projet : classes du projet instanciées (`new Invoice({…})`), unions (première valeur), tableaux de deux éléments, rappels vides, et des valeurs qui suivent le nom des champs (`amount` → un montant, `date` → une date récente, `vendor` → « Carrefour », `visible` → `true`…). Elles sont plausibles, pas cohérentes entre elles. Branchez-les avant les vôtres, qui restent prioritaires : `examples: { ...generatedExamples, ...vosExemples }`. Le fichier est réécrit à chaque génération (et au démarrage de `rn-canvas dev` s'il existe) : copiez un exemple dans la configuration pour le retoucher. Les modales et panneaux qui s'affichent par-dessus l'écran n'ont pas d'aperçu en vignette : leur bouton **Ouvrir en grand** crée l'écran `canvas/components/<Nom>.canvas.tsx` (s'il n'existe pas), qui affiche le composant ouvert, en taille réelle, avec son exemple (`example: '<Nom>'` dans le `default`, `example: 'variante'` dans une story pour en choisir une). Les panneaux pilotés par ref (`BottomSheetModal` de @gorhom…) sont ouverts automatiquement (`present()`).
 - **Clic droit** sur un élément (dans l'écran ou dans les calques) : Dupliquer, Copier le code JSX, Copier l'emplacement, Ouvrir dans VS Code, Sélectionner le parent, Supprimer.
 - **Dégradés** (`expo-linear-gradient`, `react-native-linear-gradient`) : la section « Fond dégradé » apparaît pour un `LinearGradient` ou pour un élément dont c'est le calque de fond (`absoluteFill`). Aperçu, couleurs réellement rendues (même calculées), modification de chaque couleur (valeur ou jeton du thème), ajout / retrait, direction.
 - **Version** : affichée à côté du nom du projet, pour vérifier quelle version de l'éditeur tourne.
-- **Disposition** : glissez un écran par son nom (au-dessus du cadre) pour le placer où vous voulez ; il s'aligne sur la grille de points (Alt : placement libre). Les positions sont mémorisées ; le bouton ⊞ remet la grille d'origine.
+- **Disposition** : glissez un écran par son nom (au-dessus du cadre) pour le placer où vous voulez ; il s'aligne sur la grille de points (Alt : placement libre). Les positions sont enregistrées par page dans `canvas/parcours.json` ; le bouton ⊞ remet la grille d’origine de la page.
 - **Zoom** : ⌘/Ctrl + molette (ou pincement du trackpad), y compris au-dessus d'un écran ; ⌘/Ctrl + / − ; ⌘/Ctrl 0 ou Maj 1 pour tout afficher ; Maj 0 pour 100 %. La vue est mémorisée : ni un rechargement ni l'affichage / le masquage d'un écran ne la changent.
 - **Navigation** : un écran du canevas reste affiché seul. Une redirection ou un `router.push` y est ignoré et signalé par une notification.
 - **Un seul onglet** : les écrans partagent leurs bases de données d'un onglet à l'autre ; un deuxième onglet de l'éditeur propose « Utiliser cet onglet ». Avec Brave, si les écrans affichent des erreurs de stockage, désactivez les Shields pour `localhost`.
@@ -166,6 +182,10 @@ Si l'éditeur est ouvert en même temps, il affiche les modifications de l'IA en
 `theme.alias` (optionnel) : nom sous lequel les composants accèdent au thème, s'il diffère de l'export. Par exemple `"export": "LIGHT_COLORS", "alias": "colors"` quand les composants écrivent `const { colors } = useTheme()` : le sélecteur de jetons propose alors `colors.primary`.
 
 `routerRoot` (détecté : `app` ou `src/app` quand le projet dépend d'expo-router) : dossier des routes, utilisé par le mode Flux pour relier une cible (`/invoice/123`) à son écran (`app/invoice/[id].tsx`), puis au fichier canvas qui l'importe. `null` le désactive.
+
+`board` (par défaut `canvas/parcours.json`, ou `rn-canvas.board.json` sans dossier `canvas/`) : fichier des pages, parcours, groupes et notes du canevas.
+
+`ignoreRoutes` : routes sans interface (redirections…) que l'onglet Écrans et `rn-canvas screens` ne proposent pas, ex. `["app/budget/review.tsx"]`. L'onglet Écrans signale les autres routes sans fichier canvas, avec un bouton pour les créer.
 
 `isolateStories` (activé par défaut si l'app tourne sur `localhost`) : chaque écran est servi depuis son propre sous-domaine (`accueil-actuel-1k2j.localhost:8081`), que les navigateurs résolvent vers la machine locale. Chaque écran a ainsi son propre stockage (localStorage, IndexedDB, OPFS) : pas de conflit entre écrans affichés en parallèle, ce qui est indispensable pour expo-sqlite sur le web, dont la base ne s'ouvre que dans un seul onglet à la fois.
 

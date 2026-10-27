@@ -8,6 +8,11 @@ import { displayValue, toHex } from './values.ts';
 interface Props {
   project: ProjectInfo;
   hidden: Set<string>;
+  /** Nom du parcours affiché ; null : vue d'ensemble (les cases affichent / masquent les écrans). */
+  parcours: string | null;
+  /** Routes d'expo-router sans écran dans le canevas. */
+  missingRoutes: { file: string; title: string }[];
+  onGenerateRoutes: () => void;
   onToggleStory: (id: string) => void;
   activeStory: string | null;
   onActivateStory: (id: string) => void;
@@ -76,19 +81,46 @@ export function Sidebar(props: Props) {
   );
 }
 
-function Screens({ project, hidden, onToggleStory, activeStory, onActivateStory, onSaveVariant }: Props) {
+function Screens({ project, hidden, parcours, missingRoutes, onGenerateRoutes, onToggleStory, activeStory, onActivateStory, onSaveVariant }: Props) {
   const [saving, setSaving] = useState<string | null>(null);
   const [name, setName] = useState('');
-  if (project.stories.length === 0) return <p className="hint">Aucun fichier *.canvas.tsx trouvé.</p>;
+  const routes = missingRoutes.length > 0 && parcours === null && (
+    <div className="notice">
+      {missingRoutes.length} écran{missingRoutes.length > 1 ? 's' : ''} de l'app sans fichier canvas :{' '}
+      <span title={missingRoutes.map((r) => r.file).join('\n')}>
+        {missingRoutes
+          .slice(0, 4)
+          .map((r) => r.title)
+          .join(', ')}
+        {missingRoutes.length > 4 ? '…' : ''}
+      </span>
+      <button className="primary-button small" onClick={onGenerateRoutes}>
+        Créer {missingRoutes.length > 1 ? 'les écrans' : "l'écran"}
+      </button>
+    </div>
+  );
+  if (project.stories.length === 0)
+    return (
+      <>
+        {routes}
+        <p className="hint">Aucun fichier *.canvas.tsx trouvé.</p>
+      </>
+    );
   return (
     <>
+      {routes}
+      {parcours !== null && (
+        <p className="notice">
+          Parcours <strong>{parcours}</strong> : cochez les écrans qui en font partie. Leur disposition ici ne change pas la vue d'ensemble.
+        </p>
+      )}
       <p className="hint small">Une variante peut garder l'état d'un écran : remplissez-le en mode Interaction, puis « ＋ État ».</p>
       {project.stories.map((group) => (
         <div key={group.file} className="group">
           <div className="group-title" title={group.file}>{group.title}</div>
           {group.stories.map((story) => (
             <div key={story.id} className={`row ${activeStory === story.id ? 'selected' : ''}`}>
-              <input type="checkbox" checked={!hidden.has(story.id)} onChange={() => onToggleStory(story.id)} aria-label={`Afficher ${story.title}`} />
+              <input type="checkbox" checked={!hidden.has(story.id)} onChange={() => onToggleStory(story.id)} aria-label={parcours !== null ? `Inclure ${story.title} dans le parcours` : `Afficher ${story.title}`} />
               <button className="row-label" onClick={() => onActivateStory(story.id)}>{story.title}</button>
               <button
                 className="icon small-action"

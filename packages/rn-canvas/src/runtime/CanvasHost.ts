@@ -1,6 +1,7 @@
 import { Component, type ComponentType, type ReactElement, type ReactNode, createElement as h, useEffect, useState } from 'react';
 import { ScrollView, StyleSheet, Text, View } from 'react-native';
 import { startInspector, StoryRoot } from './inspector';
+import { RouteParams, setRouteParamsContext } from './params';
 import type { CanvasManifest, CanvasMeta, CanvasStoryObject, CanvasWrapperProps } from './types';
 
 interface ResolvedStory {
@@ -9,6 +10,7 @@ interface ResolvedStory {
   setups: (() => void | (() => void))[];
   parameters: Record<string, unknown>;
   storage: Record<string, string> | null;
+  params: Record<string, string> | null;
 }
 
 /** Props de l'exemple `component` (variante `variant`, sinon la première) déclaré dans rn-canvas.config.tsx. */
@@ -50,7 +52,7 @@ function resolveStory(storyId: string, manifest: CanvasManifest): ResolvedStory 
   const wrappers = [manifest.config?.wrapper, meta.wrapper].filter(Boolean) as ComponentType<CanvasWrapperProps>[];
 
   if (typeof story === 'function') {
-    return { render: () => h(story), wrappers, setups: meta.setup ? [meta.setup] : [], parameters: meta.parameters ?? {}, storage: null };
+    return { render: () => h(story), wrappers, setups: meta.setup ? [meta.setup] : [], parameters: meta.parameters ?? {}, storage: null, params: meta.params ?? null };
   }
 
   const s = story as CanvasStoryObject;
@@ -69,6 +71,7 @@ function resolveStory(storyId: string, manifest: CanvasManifest): ResolvedStory 
     setups: [meta.setup, s.setup].filter(Boolean) as ResolvedStory['setups'],
     parameters: { ...meta.parameters, ...s.parameters },
     storage: s.storage ?? null,
+    params: meta.params || s.params ? { ...meta.params, ...s.params } : null,
   };
 }
 
@@ -78,6 +81,7 @@ export function CanvasHost({ storyId, loadManifest }: { storyId: string; loadMan
     try {
       const manifest = loadManifest();
       if (manifest.router) neutralizeRouter(manifest.router, storyId);
+      setRouteParamsContext(manifest.routeParams);
       const story = resolveStory(storyId, manifest);
       if (story.storage) restoreStorage(story.storage);
       const cleanups = story.setups.map((setup) => setup());
@@ -100,6 +104,8 @@ export function CanvasHost({ storyId, loadManifest }: { storyId: string; loadMan
 
   const { story } = state;
   let element: ReactNode = h(StoryRoot, null, h(StoryRender, { render: story.render }));
+  // Paramètres de route : ceux que l'écran lirait dans l'URL (useLocalSearchParams).
+  if (story.params) element = h(RouteParams, { params: story.params }, element);
   for (const Wrapper of [...story.wrappers].reverse()) {
     element = h(Wrapper, { story: { id: storyId, parameters: story.parameters }, children: element });
   }

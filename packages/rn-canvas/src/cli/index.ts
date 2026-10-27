@@ -4,6 +4,9 @@
  *   rn-canvas init       branche le projet courant (config, Babel, point d'entrée, manifeste)
  *   rn-canvas dev        lance l'éditeur (+ le serveur Expo si besoin)
  *   rn-canvas generate   régénère le manifeste des stories
+ *   rn-canvas screens    crée un fichier canvas par route d'expo-router qui n'en a pas
+ *   rn-canvas examples   données d'exemple des composants, tirées des types de leurs props
+ *   rn-canvas providers  propose rn-canvas.config.tsx à partir des fournisseurs du layout racine
  *   rn-canvas mcp        serveur MCP (stdio) pour piloter les écrans depuis une IA
  */
 import { spawn, type ChildProcess } from 'node:child_process';
@@ -15,6 +18,8 @@ import { serveMcp } from '../server/mcp.ts';
 import { CONFIG_FILE, Project } from '../server/project.ts';
 import { diagnose, printChecks } from './doctor.ts';
 import { addBabelPlugin } from './patch.ts';
+import { proposeProviders, rootLayoutFile } from '../server/scaffold.ts';
+import { examplesFile } from '../server/examples.ts';
 
 const EDITOR_DIR = fileURLToPath(new URL('./editor', import.meta.url));
 const ENTRY_IMPORT = "import { withCanvas } from 'rn-canvas/runtime';";
@@ -22,7 +27,7 @@ const ENTRY_IMPORT = "import { withCanvas } from 'rn-canvas/runtime';";
 const [command = 'help', ...args] = process.argv.slice(2);
 const root = process.cwd();
 
-const commands: Record<string, () => Promise<void> | void> = { init, dev, generate, mcp, doctor, help };
+const commands: Record<string, () => Promise<void> | void> = { init, dev, generate, screens, providers, examples, mcp, doctor, help };
 await (commands[command] ?? help)();
 
 function flag(name: string): string | true | undefined {
@@ -49,6 +54,10 @@ function help() {
   rn-canvas dev [--port 7007]    Lance l'éditeur ; démarre Expo si l'app ne répond pas
               [--no-app]         … sans démarrer Expo
   rn-canvas generate             Régénère le manifeste des stories
+  rn-canvas screens              Crée un écran du canevas pour chaque route de app/ qui n'en a pas
+  rn-canvas examples             Génère les données d'exemple des composants à partir des types de leurs props
+  rn-canvas providers            Reprend les fournisseurs de app/_layout.tsx (ou App.tsx) dans rn-canvas.config.tsx
+              [--print]          … ou les affiche sans rien écrire
   rn-canvas doctor               Vérifie le projet : ce qui bloquera le canevas, et comment le corriger
   rn-canvas mcp                  Serveur MCP (stdio) : claude mcp add rn-canvas -- npx rn-canvas mcp`);
 }
@@ -56,6 +65,54 @@ function help() {
 function mcp() {
   const pkg = JSON.parse(fs.readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
   serveMcp(new Project(root), pkg.version);
+}
+
+function screens() {
+  const project = new Project(root);
+  if (!project.config.routerRoot) return log("Pas de dossier de routes expo-router (app/) : rien à générer.");
+  const { created } = project.generateRouteStories();
+  if (!created.length) return log('Chaque route a déjà son écran.');
+  log(`${created.length} écran(s) créé(s) :`);
+  for (const file of created) console.log(`  • ${file}`);
+}
+
+/** Écrit rn-canvas.config.tsx (s'il n'existe pas) avec les fournisseurs du layout racine. */
+function writeProviders(project: Project, print: boolean): void {
+  const layout = rootLayoutFile(root, project.config.routerRoot);
+  if (!layout) return log('Aucune mise en page racine trouvée (app/_layout.tsx, App.tsx) : pas de fournisseurs à reprendre.');
+  const generated = examplesFile(project.config.include);
+  const proposal = proposeProviders(root, layout, project.config.runtimeConfig, fs.existsSync(path.join(root, generated)) ? relativeImport(project.config.runtimeConfig, generated) : null);
+  if (!proposal) return log(`Aucun fournisseur reconnu dans ${layout} : ajoutez-les dans ${project.config.runtimeConfig} (voir README).`);
+  const target = path.join(root, project.config.runtimeConfig);
+  if (print || fs.existsSync(target)) {
+    if (!print) log(`${project.config.runtimeConfig} existe déjà : proposition affichée, rien n'est écrit.`);
+    console.log(proposal.code);
+    return;
+  }
+  fs.writeFileSync(target, proposal.code);
+  log(`${project.config.runtimeConfig} créé avec les fournisseurs de ${layout} : ${proposal.wrappers.join(', ')}.`);
+  for (const t of proposal.todo) console.log(`  • ${t}`);
+}
+
+function examples() {
+  const project = new Project(root);
+  const result = project.writeGeneratedExamples();
+  if (!result) return log("TypeScript introuvable dans le projet : pas de données d'exemple générées.");
+  log(`${result.file} ${result.changed ? 'écrit' : 'déjà à jour'} : ${result.components.length} composant(s).`);
+  const config = path.join(root, project.config.runtimeConfig);
+  if (fs.existsSync(config) && !fs.readFileSync(config, 'utf8').includes('generatedExamples')) {
+    log(`Pour les utiliser, dans ${project.config.runtimeConfig} : import { generatedExamples } from '${relativeImport(project.config.runtimeConfig, result.file)}';`);
+    console.log('  puis examples: { ...generatedExamples, ...vosExemples } (les vôtres restent prioritaires).');
+  }
+}
+
+function relativeImport(from: string, to: string): string {
+  const rel = path.posix.relative(path.posix.dirname(from), to.replace(/\.tsx?$/, ''));
+  return rel.startsWith('.') ? rel : `./${rel}`;
+}
+
+function providers() {
+  writeProviders(new Project(root), flag('print') === true);
 }
 
 function generate() {
@@ -69,6 +126,17 @@ async function dev() {
   project.writeManifest();
 
   const server = await startServer(project, { port, editorDir: EDITOR_DIR });
+
+  // Exemples générés (si le projet les utilise) : remis à jour en arrière-plan, pour les nouveaux composants.
+  if (fs.existsSync(path.join(root, examplesFile(project.config.include)))) {
+    setTimeout(() => {
+      try {
+        if (project.writeGeneratedExamples()?.changed) log("Données d'exemple des composants mises à jour.");
+      } catch (error) {
+        log(`Données d'exemple non mises à jour : ${(error as Error).message}`);
+      }
+    }, 2000);
+  }
 
   // Nouvelles stories / config runtime : on régénère le manifeste et on prévient l'éditeur.
   const watched = [...project.config.include, path.dirname(project.config.runtimeConfig)];
@@ -255,7 +323,17 @@ module.exports = withRnCanvas(getDefaultConfig(__dirname));
   // Un babel.config.js explicite doit pouvoir résoudre le preset Expo depuis la racine.
   if (!deps['babel-preset-expo']) todo.push('Installez le preset Babel : npx expo install babel-preset-expo -- --save-dev');
 
-  new Project(root).writeManifest();
+  // 5. Fournisseurs du layout racine, puis un écran par route d'expo-router (rien n'est écrasé)
+  const project = new Project(root);
+  const generated = project.writeGeneratedExamples();
+  if (generated?.components.length) log(`Données d'exemple tirées des types : ${generated.components.length} composant(s) dans ${generated.file}.`);
+  if (!fs.existsSync(path.join(root, project.config.runtimeConfig))) writeProviders(project, false);
+  if (project.config.routerRoot) {
+    const { created } = project.generateRouteStories();
+    if (created.length) log(`${created.length} écran(s) créé(s) depuis ${project.config.routerRoot}/ dans ${path.dirname(created[0])}/.`);
+  }
+
+  project.writeManifest();
   log('Manifeste des stories généré.');
 
   if (todo.length) {
@@ -265,7 +343,7 @@ module.exports = withRnCanvas(getDefaultConfig(__dirname));
   log('Vérifiez le projet avec « npx rn-canvas doctor ».');
   log(
     pkg.dependencies?.['expo-router']
-      ? 'Créez vos fichiers *.canvas.tsx dans canvas/ (pas dans app/ : ce seraient des routes), puis lancez « npm run canvas ».'
+      ? 'Lancez « npm run canvas ». Les écrans sont dans canvas/ (pas dans app/ : ce seraient des routes).'
       : 'Créez un fichier *.canvas.tsx à côté d’un écran, puis lancez « npm run canvas ».',
   );
 }

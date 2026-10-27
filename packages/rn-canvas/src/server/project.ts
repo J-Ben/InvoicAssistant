@@ -3,10 +3,11 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
-import type { ComponentEntry, EditRequest, FlowLink, EditResult, HistoryState, InspectResult, ProjectInfo, StoryGroup, ThemeInfo, ThemeToken } from '../shared/protocol.ts';
-import { parseLoc } from '../shared/protocol.ts';
+import type { Board, ComponentEntry, EditRequest, FlowLink, EditResult, HistoryState, InspectResult, ProjectInfo, StoryGroup, ThemeInfo, ThemeToken } from '../shared/protocol.ts';
+import { emptyBoard, normalizeBoard, parseLoc } from '../shared/protocol.ts';
 import { type AstNode, type Patch, type SourceFile, applyPatches, findProperty, jsxName, moduleDeclarators, parse, programOf, propertyKey, unwrap, walk } from './ast.ts';
 import { setProp, setStyle, setText, setToken, themeObject } from './edit.ts';
+import { examplesFile, generateExamples, writeIfChanged } from './examples.ts';
 import { matchRoute, navigationLinks, relativeImports, resolveImport, routesOf } from './flows.ts';
 import { SourceError, findElement, inspectElement, locOfIndex, meaningfulChildren, normalizeJsxText, sourceValue } from './inspect.ts';
 import { PRIMITIVES, componentsOf } from './library.ts';
@@ -35,6 +36,10 @@ export interface CanvasConfig {
   manifest: string;
   /** Dossier des routes expo-router (`app`), pour le mode Flux ; null sans expo-router. */
   routerRoot: string | null;
+  /** Pages, parcours, groupes et notes du canevas (fichier versionné avec le projet). */
+  board: string;
+  /** Routes sans interface (redirections…) à ne pas proposer comme écrans. */
+  ignoreRoutes: string[];
 }
 
 export interface ElementOutline {
@@ -96,6 +101,25 @@ export class Project {
     };
   }
 
+  // ---- Pages et parcours ----
+
+  /** Plan du canevas ; vue d'ensemble seule si le fichier n'existe pas encore. */
+  board(): Board {
+    const file = this.resolve(this.config.board);
+    return fs.existsSync(file) ? normalizeBoard(readJson(file)) : emptyBoard();
+  }
+
+  saveBoard(input: unknown): Board {
+    const board = normalizeBoard(input);
+    const file = this.resolve(this.config.board);
+    const text = `${JSON.stringify(board, null, 2)}\n`;
+    if (!fs.existsSync(file) || fs.readFileSync(file, 'utf8') !== text) {
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      fs.writeFileSync(file, text);
+    }
+    return board;
+  }
+
   // ---- Stories ----
 
   canvasFiles(): string[] {
@@ -155,7 +179,10 @@ export class Project {
       ? `require(${JSON.stringify(importPath(this.config.runtimeConfig))}).default`
       : 'undefined';
     const pkg = readJson(path.join(this.root, 'package.json')) as { dependencies?: Record<string, string> } | null;
-    const router = pkg?.dependencies?.['expo-router'] ? `\n  router: require('expo-router').router,` : '';
+    // Contexte interne d'expo-router (paramètres de route) : facultatif, absent si son chemin change.
+    const router = pkg?.dependencies?.['expo-router']
+      ? `\n  router: require('expo-router').router,\n  routeParams: (() => {\n    try {\n      return require('expo-router/build/Route').LocalRouteParamsContext;\n    } catch {\n      return undefined;\n    }\n  })(),`
+      : '';
     const entries = this.canvasFiles()
       .map((file) => `    ${JSON.stringify(file)}: () => require(${JSON.stringify(importPath(file))}),`)
       .join('\n');
@@ -187,6 +214,98 @@ export default manifest;
     return true;
   }
 
+  // ---- Données d'exemple tirées des types ----
+
+  /** Écrit le fichier d'exemples généré (`generatedExamples`) ; null si le projet n'a pas TypeScript. */
+  writeGeneratedExamples(): { file: string; components: string[]; changed: boolean } | null {
+    const file = examplesFile(this.config.include);
+    // Composants de l'app seulement (pas les enveloppes du canevas, comme canvas/seed.tsx).
+    const canvasDir = path.posix.dirname(file);
+    const components = this.components().filter((c): c is ComponentEntry & { file: string } => c.file !== null && !(canvasDir !== '.' && c.file.startsWith(`${canvasDir}/`)));
+    const result = generateExamples(this.root, components, (target) => this.moduleSpecifier(file, target));
+    if (!result) return null;
+    return { file, components: result.components, changed: writeIfChanged(this.resolve(file), result.code) };
+  }
+
+  // ---- Écrans générés depuis les routes ----
+
+  /** Fichier de route (parmi `routeFiles`) affiché par chaque fichier canvas → ses stories. */
+  private screensOfStories(routeFiles: string[]): Map<string, string[]> {
+    const known = new Set(routeFiles);
+    const out = new Map<string, string[]>();
+    for (const group of this.stories()) {
+      try {
+        const src = parse(fs.readFileSync(this.resolve(group.file), 'utf8'), group.file);
+        const screen = relativeImports(src)
+          .map((source) => resolveImport(this.root, group.file, source))
+          .find((file) => file && known.has(file));
+        if (screen) out.set(screen, [...(out.get(screen) ?? []), ...group.stories.map((s) => s.id)]);
+      } catch {
+        // Fichier canvas illisible : signalé ailleurs (liste des écrans).
+      }
+    }
+    return out;
+  }
+
+  /** Routes d'expo-router qui n'ont pas encore d'écran dans le canevas. */
+  missingRoutes(): { file: string; name: string; title: string; params: string[] }[] {
+    const routerRoot = this.config.routerRoot;
+    if (!routerRoot) return [];
+    const routes = routesOf(this.root, routerRoot);
+    const covered = this.screensOfStories(routes.map((r) => r.file));
+    return routes
+      .filter((r) => !covered.has(r.file) && !this.config.ignoreRoutes.includes(r.file))
+      .map((r) => {
+        const parts = r.file
+          .slice(routerRoot.length + 1)
+          .replace(/\.(tsx|ts|jsx|js)$/, '')
+          .split('/')
+          .filter((s) => !/^\(.+\)$/.test(s));
+        if (parts[parts.length - 1] === 'index') parts.pop();
+        const words = parts.map((s) => s.replace(/^\[(\.\.\.)?(.+)\]$/, '$2'));
+        const pascal = words.map((w) => w.replace(/(^|[-_\s])(\w)/g, (_m, _s, c: string) => c.toUpperCase())).join('') || 'Accueil';
+        return {
+          file: r.file,
+          name: pascal,
+          title: parts.length ? parts.join(' / ') : 'Accueil',
+          params: parts.filter((s) => /^\[.+\]$/.test(s)).map((s) => s.replace(/^\[(\.\.\.)?(.+)\]$/, '$2')),
+        };
+      });
+  }
+
+  /**
+   * Un fichier canvas par route sans écran (toutes, ou celles de `files`). Les routes à paramètre
+   * (`[id]`) reçoivent une valeur d'exemple à remplacer. Rien n'est écrasé.
+   */
+  generateRouteStories(files?: string[]): { created: string[] } {
+    const dir = this.config.include.includes('canvas') ? 'canvas' : `${this.config.include[0] ?? 'src'}/canvas`;
+    const created: string[] = [];
+    for (const route of this.missingRoutes()) {
+      if (files && !files.includes(route.file)) continue;
+      let target = `${dir}/${route.name}.canvas.tsx`;
+      for (let n = 2; fs.existsSync(this.resolve(target)); n++) target = `${dir}/${route.name}${n}.canvas.tsx`;
+      let spec = path.posix.relative(dir, route.file.replace(/\.(tsx|jsx|ts|js)$/, ''));
+      if (!spec.startsWith('.')) spec = `./${spec}`;
+      const params = route.params.length ? `, params: { ${route.params.map((p) => `${/^[A-Za-z_$][\w$]*$/.test(p) ? p : JSON.stringify(p)}: '1'`).join(', ')} }` : '';
+      const code = `import type { CanvasMeta, CanvasStory } from 'rn-canvas/runtime';
+import Screen from ${JSON.stringify(spec)};
+
+// Écran généré depuis ${route.file}.${route.params.length ? ` Paramètre${route.params.length > 1 ? 's' : ''} de route (${route.params.join(', ')}) : valeur d'exemple, à remplacer par un identifiant existant.` : ''}
+export default { title: ${JSON.stringify(route.title.replace(/^\w/, (c) => c.toUpperCase()))}, component: Screen${params} } satisfies CanvasMeta;
+
+// Chaque écran a son propre stockage (vide au départ, conservé entre les sessions) :
+// remplissez-le en mode Interaction puis capturez une variante.
+export const Actuel: CanvasStory = {};
+`;
+      const abs = this.resolve(target);
+      fs.mkdirSync(path.dirname(abs), { recursive: true });
+      fs.writeFileSync(abs, code);
+      created.push(target);
+    }
+    if (created.length) this.writeManifest();
+    return { created };
+  }
+
   // ---- Flux (liens de navigation) ----
 
   flows(): FlowLink[] {
@@ -195,20 +314,7 @@ export default manifest;
     const routes = routesOf(this.root, routerRoot);
     const groups = this.stories();
 
-    // Écran affiché par chaque fichier canvas : la route qu'il importe.
-    const routeFiles = new Set(routes.map((r) => r.file));
-    const storiesByScreen = new Map<string, string[]>();
-    for (const group of groups) {
-      try {
-        const src = parse(fs.readFileSync(this.resolve(group.file), 'utf8'), group.file);
-        const screen = relativeImports(src)
-          .map((source) => resolveImport(this.root, group.file, source))
-          .find((file) => file && routeFiles.has(file));
-        if (screen) storiesByScreen.set(screen, [...(storiesByScreen.get(screen) ?? []), ...group.stories.map((s) => s.id)]);
-      } catch {
-        // Fichier canvas illisible : signalé ailleurs (liste des écrans).
-      }
-    }
+    const storiesByScreen = this.screensOfStories(routes.map((r) => r.file));
 
     const code = this.sourceFiles((name) => /\.(tsx|jsx|ts|js)$/.test(name) && !CANVAS_FILE.test(name) && !/\.(test|spec|d)\./.test(name), [...this.config.include, routerRoot]);
     const links: FlowLink[] = [];
@@ -599,6 +705,8 @@ export function loadConfig(root: string): CanvasConfig {
     runtimeConfig: raw.runtimeConfig ?? 'rn-canvas.config.tsx',
     manifest: raw.manifest ?? 'rn-canvas.stories.ts',
     routerRoot: raw.routerRoot !== undefined ? raw.routerRoot : detectRouterRoot(root),
+    ignoreRoutes: Array.isArray(raw.ignoreRoutes) ? raw.ignoreRoutes : [],
+    board: raw.board ?? (fs.existsSync(path.join(root, 'canvas')) ? 'canvas/parcours.json' : 'rn-canvas.board.json'),
   };
 }
 

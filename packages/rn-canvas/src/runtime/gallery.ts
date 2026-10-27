@@ -10,6 +10,18 @@ import type { EditorMessage, GalleryItem } from '../shared/protocol';
 import { neutralizeRouter } from './CanvasHost';
 import type { CanvasManifest, ComponentExample } from './types';
 
+/** Contenu en position absolue (bandeau, pastille) : le conteneur mesure 0 mais quelque chose s'affiche. */
+function hasVisibleContent(target: unknown): boolean {
+  const el = target as { querySelectorAll?: (selector: string) => ArrayLike<{ getBoundingClientRect(): { width: number; height: number } }> } | null;
+  if (!el?.querySelectorAll) return false;
+  const all = el.querySelectorAll('*');
+  for (let i = 0; i < all.length; i++) {
+    const rect = all[i].getBoundingClientRect();
+    if (rect.width > 1 && rect.height > 1) return true;
+  }
+  return false;
+}
+
 const STORY = 'gallery';
 
 /** Composants qui s'affichent par-dessus l'écran (modale, plein écran) : pas d'aperçu dans une vignette. */
@@ -132,7 +144,7 @@ function Cell({ item, example, load }: { item: GalleryItem; example: ComponentEx
       h(
         Suspense,
         { fallback: h(Placeholder, { text: 'Chargement…' }) },
-        h(View, { pointerEvents: 'none', onLayout: (e: { nativeEvent: { layout: { height: number } } }) => setEmpty(e.nativeEvent.layout.height < 2) }, h(Render, { load, item, example })),
+        h(View, { pointerEvents: 'none', onLayout: (e: { nativeEvent: { layout: { height: number } }; target?: unknown }) => setEmpty(e.nativeEvent.layout.height < 2 && !hasVisibleContent(e.target)) }, h(Render, { load, item, example })),
       ),
       empty ? h(Placeholder, { text: missing.length ? `Rien d'affiché sans données : ${missing.join(', ')}.` : "Rien d'affiché avec les valeurs d'exemple." }) : null,
     );

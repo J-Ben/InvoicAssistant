@@ -66,6 +66,17 @@ export function startServer(project: Project, options: ServerOptions): Promise<C
         const body = (await readJson(req)) as { file: string; name: string };
         return send(res, 200, project.createComponentStory(body.file, body.name));
       }
+      if (url.pathname === '/api/board' && req.method === 'GET') return send(res, 200, project.board());
+      if (url.pathname === '/api/board' && req.method === 'PUT') {
+        if (!req.headers['content-type']?.startsWith('application/json')) throw new SourceError('Content-Type JSON attendu.', 415);
+        return send(res, 200, project.saveBoard(await readJson(req)));
+      }
+      if (url.pathname === '/api/routes' && req.method === 'GET') return send(res, 200, project.missingRoutes());
+      if (url.pathname === '/api/routes' && req.method === 'POST') {
+        if (!req.headers['content-type']?.startsWith('application/json')) throw new SourceError('Content-Type JSON attendu.', 415);
+        const body = (await readJson(req)) as { files?: string[] };
+        return send(res, 200, project.generateRouteStories(Array.isArray(body.files) ? body.files : undefined));
+      }
       if (url.pathname === '/api/flows' && req.method === 'GET') return send(res, 200, project.flows());
       if (url.pathname === '/api/history' && req.method === 'GET') return send(res, 200, project.history());
       if (url.pathname === '/api/undo' && req.method === 'POST') return send(res, 200, project.undo());

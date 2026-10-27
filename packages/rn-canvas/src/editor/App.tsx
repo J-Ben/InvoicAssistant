@@ -8,6 +8,8 @@ import { ContextMenu } from './ContextMenu.tsx';
 import { Inspector } from './Inspector.tsx';
 import { CONTAINERS, Sidebar, takeDraggedComponent } from './Sidebar.tsx';
 import { LibraryBar } from './LibraryBar.tsx';
+import { PagesBar, useBoard } from './Pages.tsx';
+import type { FlowMode } from './Flows.tsx';
 
 type ThemePref = 'system' | 'light' | 'dark';
 /** Version et date de construction, injectées par build.mjs. */
@@ -127,7 +129,33 @@ export function App() {
   }, [loadProject]);
 
   const stories = useMemo(() => project?.stories.flatMap((g) => g.stories) ?? [], [project]);
-  const visible = stories.filter((s) => !hidden.has(s.id));
+  // Pages : la vue d'ensemble montre les écrans cochés, un parcours ceux qu'il reprend (dans son ordre).
+  const boardState = useBoard(project?.appUrl ?? null, (text) => setToast({ kind: 'error', text }));
+  const { board, page } = boardState;
+  const [flowMode, setFlowMode] = useState<FlowMode>('all');
+  // Routes d'expo-router sans écran : proposées dans l'onglet Écrans.
+  const [missingRoutes, setMissingRoutes] = useState<{ file: string; title: string }[]>([]);
+  useEffect(() => {
+    if (project) api.missingRoutes().then(setMissingRoutes, () => setMissingRoutes([]));
+  }, [project]);
+  const generateRoutes = async () => {
+    try {
+      const { created } = await api.generateRoutes();
+      setToast({ kind: 'ok', text: `${created.length} écran(s) créé(s) dans ${created[0]?.split('/').slice(0, -1).join('/') ?? 'canvas'}` });
+      loadProject();
+    } catch (e) {
+      setToast({ kind: 'error', text: (e as Error).message });
+    }
+  };
+  const visible = useMemo(
+    () =>
+      page?.stories
+        ? page.stories.map((id) => stories.find((s) => s.id === id)).filter((s): s is (typeof stories)[number] => Boolean(s))
+        : stories.filter((s) => !hidden.has(s.id)),
+    [page, stories, hidden],
+  );
+  // Écrans non affichés sur la page (cases décochées de la liste).
+  const pageHidden = useMemo(() => (page?.stories ? new Set(stories.filter((s) => !page.stories!.includes(s.id)).map((s) => s.id)) : hidden), [page, stories, hidden]);
 
   const send = useCallback((story: string | null, message: Payload<EditorMessage>) => {
     const payload = { source: 'rn-canvas-editor', ...message };
@@ -516,14 +544,19 @@ export function App() {
           setMenu({ x, y });
         }}
         project={project}
-        hidden={hidden}
+        hidden={pageHidden}
+        parcours={page?.stories ? page.name : null}
+        missingRoutes={missingRoutes}
+        onGenerateRoutes={generateRoutes}
         onToggleStory={(id) =>
-          setHidden((h) => {
-            const next = new Set(h);
-            if (next.has(id)) next.delete(id);
-            else next.add(id);
-            return next;
-          })
+          page?.stories
+            ? boardState.updatePage(page.id, (p) => ({ ...p, stories: p.stories!.includes(id) ? p.stories!.filter((s) => s !== id) : [...p.stories!, id] }))
+            : setHidden((h) => {
+                const next = new Set(h);
+                if (next.has(id)) next.delete(id);
+                else next.add(id);
+                return next;
+              })
         }
         activeStory={activeStory}
         onActivateStory={setActiveStory}
@@ -552,8 +585,18 @@ export function App() {
             )}
           </div>
         </main>
+      ) : !board || !page ? (
+        <main className="canvas" />
       ) : (
         <Canvas
+          page={page}
+          onChangePage={(update) => boardState.updatePage(page.id, update)}
+          onCreateParcours={(name, ids) => {
+            boardState.addPage(name, ids);
+            setToast({ kind: 'ok', text: `Parcours « ${name} » créé avec ${ids.length} écran(s)` });
+          }}
+          flowMode={flowMode}
+          onFlowMode={setFlowMode}
           appUrl={project.appUrl}
           isolateStories={project.isolateStories}
           stories={visible}
@@ -569,6 +612,14 @@ export function App() {
           onActivate={setActiveStory}
           empty={stories.length === 0}
         >
+          <PagesBar
+            board={board}
+            page={page}
+            onSelect={boardState.setPageId}
+            onAdd={(name) => boardState.addPage(name)}
+            onRename={(id, name) => boardState.updatePage(id, (p) => ({ ...p, name }))}
+            onRemove={boardState.removePage}
+          />
           <LibraryBar components={project.components} target={insertTargetLabel} onInsert={insertComponent} onOpenComponent={openComponentScreen} appUrl={project.appUrl} isolateStories={project.isolateStories} />
         </Canvas>
       )}

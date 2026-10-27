@@ -1,4 +1,4 @@
-import type { EditRequest, EditResult, FlowLink, HistoryState, InspectResult, ProjectInfo } from '../shared/protocol.ts';
+import type { Board, EditRequest, EditResult, FlowLink, HistoryState, InspectResult, ProjectInfo } from '../shared/protocol.ts';
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
   const res = await fetch(url, init);
@@ -23,6 +23,11 @@ export const api = {
   edit: (body: EditRequest) =>
     request<EditResult>('/api/edit', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }),
   history: () => request<HistoryState>('/api/history'),
+  board: () => request<Board>('/api/board'),
+  saveBoard: (board: Board) => request<Board>('/api/board', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(board) }),
+  missingRoutes: () => request<{ file: string; name: string; title: string; params: string[] }[]>('/api/routes'),
+  generateRoutes: (files?: string[]) =>
+    request<{ created: string[] }>('/api/routes', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ files }) }),
   flows: () => request<FlowLink[]>('/api/flows'),
   componentStory: (file: string, name: string) =>
     request<{ story: string; file: string; created: boolean }>('/api/component-story', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ file, name }) }),

@@ -278,3 +278,58 @@ test('écran de composant : modale ouverte, rappels neutres, exemple du composan
   assert.equal(project.createComponentStory('src/components/PriceModal.tsx', 'PriceModal').created, false);
   assert.throws(() => project.createComponentStory('src/components/PriceModal.tsx', 'Nope'), /introuvable/);
 });
+
+test('parcours : vue d’ensemble par défaut, fichier du projet, valeurs remises en forme', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'rnc-board-'));
+  fs.mkdirSync(path.join(root, 'canvas'));
+  const project = new Project(root);
+  assert.equal(project.config.board, 'canvas/parcours.json');
+  assert.deepEqual(project.board().pages.map((p) => [p.id, p.stories]), [['overview', null]]);
+
+  const saved = project.saveBoard({
+    pages: [
+      { id: 'scan', name: 'Scanner', stories: ['canvas/Scan.canvas.tsx#Actuel', 42], positions: { a: { x: 10.4, y: 'x' } }, groups: [{ name: 'Saisie', x: 0, y: 0, width: 10, height: 10 }], notes: [{ text: 'À revoir', x: 5, y: 5 }] },
+      { id: 'overview', name: 'Tout', stories: ['ignoré'] },
+    ],
+  });
+  // La vue d'ensemble reste la première page et montre toujours tous les écrans.
+  assert.deepEqual(saved.pages.map((p) => [p.id, p.stories]), [['overview', null], ['scan', ['canvas/Scan.canvas.tsx#Actuel']]]);
+  const scan = saved.pages[1];
+  assert.deepEqual(scan.positions, { a: { x: 10, y: 0 } });
+  assert.equal(scan.groups[0].width, 200);
+  assert.equal(scan.notes[0].color, 'yellow');
+  assert.deepEqual(new Project(root).board(), saved);
+  assert.ok(fs.readFileSync(path.join(root, 'canvas/parcours.json'), 'utf8').endsWith('}\n'));
+});
+
+test('écrans générés depuis app/ : routes sans écran, paramètres, noms, rien d’écrasé', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'rnc-routes-'));
+  const write = (file: string, code: string) => {
+    fs.mkdirSync(path.dirname(path.join(root, file)), { recursive: true });
+    fs.writeFileSync(path.join(root, file), code);
+  };
+  write('package.json', JSON.stringify({ name: 'demo', dependencies: { 'expo-router': '*' } }));
+  write('rn-canvas.json', JSON.stringify({ include: ['src', 'canvas'] }));
+  const screen = 'export default function Screen() { return null; }\n';
+  for (const f of ['app/_layout.tsx', 'app/+not-found.tsx', 'app/(tabs)/index.tsx', 'app/(tabs)/account.tsx', 'app/invoice/[id].tsx', 'app/budget/review.tsx']) write(f, screen);
+  write('canvas/Compte.canvas.tsx', "import Screen from '../app/(tabs)/account';\nexport default { title: 'Compte', component: Screen };\nexport const Actuel = {};\n");
+  const project = new Project(root);
+  assert.deepEqual(
+    project.missingRoutes().map((r) => [r.file, r.name, r.title, r.params]),
+    [
+      ['app/(tabs)/index.tsx', 'Accueil', 'Accueil', []],
+      ['app/budget/review.tsx', 'BudgetReview', 'budget / review', []],
+      ['app/invoice/[id].tsx', 'InvoiceId', 'invoice / [id]', ['id']],
+    ].sort((a, b) => String(a[0]).localeCompare(String(b[0]))),
+  );
+  const { created } = project.generateRouteStories();
+  assert.equal(created.length, 3);
+  const invoice = fs.readFileSync(path.join(root, 'canvas/InvoiceId.canvas.tsx'), 'utf8');
+  assert.ok(invoice.includes(`import Screen from "../app/invoice/[id]";`), invoice);
+  assert.ok(invoice.includes(`params: { id: '1' }`));
+  assert.ok(invoice.includes(`title: "Invoice / [id]"`));
+  assert.ok(fs.readFileSync(path.join(root, 'canvas/Accueil.canvas.tsx'), 'utf8').includes(`"../app/(tabs)/index"`));
+  assert.ok(fs.readFileSync(path.join(root, 'rn-canvas.stories.ts'), 'utf8').includes('LocalRouteParamsContext'));
+  assert.deepEqual(project.missingRoutes(), []);
+  assert.deepEqual(project.generateRouteStories().created, []);
+});

@@ -1,4 +1,4 @@
-import type { ComponentType, ReactElement, ReactNode } from 'react';
+import type { ComponentType, Context, ReactElement, ReactNode } from 'react';
 
 export interface CanvasWrapperProps {
   children: ReactNode;
@@ -27,12 +27,16 @@ export interface CanvasStoryObject<P = Record<string, unknown>> {
   storage?: Record<string, string>;
   /** Variante des exemples du composant (`examples` de rn-canvas.config.tsx) à utiliser, par son nom. */
   example?: string;
+  /** Paramètres de route (expo-router) lus par `useLocalSearchParams()` : `{ id: '42' }` pour app/invoice/[id].tsx. */
+  params?: Record<string, string>;
 }
 
 export type CanvasStory<P = Record<string, unknown>> = CanvasStoryObject<P> | ComponentType;
 
 /** Export par défaut d'un fichier `*.canvas.tsx`. */
-export interface CanvasMeta<P = Record<string, unknown>> {
+// Par défaut `any` : un composant aux props obligatoires (une modale) reste accepté par `satisfies CanvasMeta`.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export interface CanvasMeta<P = any> {
   title?: string;
   component?: ComponentType<P>;
   /**
@@ -44,6 +48,8 @@ export interface CanvasMeta<P = Record<string, unknown>> {
   wrapper?: ComponentType<CanvasWrapperProps>;
   setup?: () => void | (() => void);
   parameters?: Record<string, unknown>;
+  /** Paramètres de route par défaut de l'écran (voir `CanvasStoryObject.params`). */
+  params?: Record<string, string>;
 }
 
 /** Exemple d'un composant de la bibliothèque : ses props (et enfants) pour l'aperçu. */
@@ -74,6 +80,9 @@ export interface CanvasManifest {
    */
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   router?: Record<string, any>;
+  /** Contexte des paramètres de route d'expo-router, pour fournir `params` aux écrans. */
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  routeParams?: Context<any>;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   files: Record<string, () => any>;
   /** Composants de la bibliothèque (`fichier#Nom`), pour leurs aperçus dans l'éditeur. */

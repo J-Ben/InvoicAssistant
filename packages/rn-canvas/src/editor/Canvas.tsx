@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import type { StoryEntry } from '../shared/protocol.ts';
-import { type FlowData, FlowLayer, FlowLegend, layoutFlows } from './Flows.tsx';
+import type { BoardGroup, BoardNote, BoardPage, StoryEntry } from '../shared/protocol.ts';
+import { type FlowData, FlowLayer, FlowLegend, type FlowMode, layoutFlows, viewFlows } from './Flows.tsx';
 import { storyUrl } from './urls.ts';
 
 /** `shown` : l'écran a affiché quelque chose ; `empty` : prêt mais toujours vide après un long délai. */
@@ -26,14 +26,19 @@ const LABEL = 28;
 /** Les écrans sont rangés en grille plutôt qu'en une seule ligne interminable. */
 const COLUMNS = 4;
 const VIEW_KEY = 'rn-canvas:view';
+const VIEWS_KEY = 'rn-canvas:views';
 const POSITIONS_KEY = 'rn-canvas:positions';
+export const GROUP_COLORS = ['violet', 'blue', 'green', 'yellow', 'pink', 'grey'];
+export const NOTE_COLORS = ['yellow', 'blue', 'green', 'pink'];
+const newId = () => Math.random().toString(36).slice(2, 10);
 /** Pas de la grille de points du fond : un écran déplacé s'y aligne. */
 const SNAP = 20;
 
 type View = { x: number; y: number; zoom: number };
 type Point = { x: number; y: number };
 
-function readPositions(appUrl: string): Record<string, Point> {
+/** Positions mémorisées dans le navigateur par les versions précédentes (reprises dans la vue d'ensemble). */
+export function legacyPositions(appUrl: string): Record<string, Point> {
   try {
     const all = JSON.parse(localStorage.getItem(POSITIONS_KEY) ?? '{}');
     return all?.[appUrl] ?? {};
@@ -42,24 +47,39 @@ function readPositions(appUrl: string): Record<string, Point> {
   }
 }
 
-function writePositions(appUrl: string, positions: Record<string, Point>) {
-  try {
-    const all = JSON.parse(localStorage.getItem(POSITIONS_KEY) ?? '{}') ?? {};
-    all[appUrl] = positions;
-    localStorage.setItem(POSITIONS_KEY, JSON.stringify(all));
-  } catch {
-    // Stockage indisponible : les positions valent pour la session.
-  }
-}
+const validView = (view: View | null | undefined): View | null => (view && [view.x, view.y, view.zoom].every(Number.isFinite) ? view : null);
 
-function readView(): View | null {
+/** Vue (déplacement, zoom) de chaque page, mémorisée dans le navigateur. */
+function readView(page: string): View | null {
   try {
-    const view = JSON.parse(localStorage.getItem(VIEW_KEY) ?? 'null');
-    return view && [view.x, view.y, view.zoom].every(Number.isFinite) ? view : null;
+    const views = JSON.parse(localStorage.getItem(VIEWS_KEY) ?? '{}') ?? {};
+    if (views[page]) return validView(views[page]);
+    // Ancienne vue unique : celle de la vue d'ensemble.
+    return page === 'overview' ? validView(JSON.parse(localStorage.getItem(VIEW_KEY) ?? 'null')) : null;
   } catch {
     return null;
   }
 }
+
+function writeView(page: string, view: View) {
+  try {
+    const views = JSON.parse(localStorage.getItem(VIEWS_KEY) ?? '{}') ?? {};
+    views[page] = view;
+    localStorage.setItem(VIEWS_KEY, JSON.stringify(views));
+  } catch {
+    // Stockage indisponible : la vue n'est simplement pas mémorisée.
+  }
+}
+
+const inside = (point: Point, box: { x: number; y: number; width: number; height: number }) =>
+  point.x >= box.x && point.x <= box.x + box.width && point.y >= box.y && point.y <= box.y + box.height;
+
+/** Glisser en cours : un écran, un groupe (avec son contenu), le coin d'un groupe ou une note. */
+type Drag =
+  | { kind: 'story'; id: string; startX: number; startY: number; from: Point; moved: boolean }
+  | { kind: 'group'; id: string; startX: number; startY: number; from: Point; moved: boolean; stories: [string, Point][]; notes: [string, Point][]; groups: [string, Point][] }
+  | { kind: 'resize'; id: string; startX: number; startY: number; from: Point; moved: boolean; note: boolean }
+  | { kind: 'note'; id: string; startX: number; startY: number; from: Point; moved: boolean };
 
 interface Props {
   appUrl: string;
@@ -82,6 +102,13 @@ interface Props {
   empty: boolean;
   /** Écran à amener au centre de la vue (nouvel écran de composant) ; `seq` change à chaque demande. */
   reveal?: { id: string; seq: number } | null;
+  /** Page affichée : disposition, groupes et notes. */
+  page: BoardPage;
+  onChangePage: (update: (page: BoardPage) => BoardPage) => void;
+  /** Nouveau parcours avec ces écrans (bouton d'un groupe). */
+  onCreateParcours: (name: string, stories: string[]) => void;
+  flowMode: FlowMode;
+  onFlowMode: (mode: FlowMode) => void;
   /** Barres flottantes (bibliothèque) posées sur le canevas. */
   children?: React.ReactNode;
 }
@@ -90,11 +117,14 @@ interface Props {
  * Canevas infini : déplacement (glisser le fond, molette), zoom (Ctrl/⌘ + molette, boutons).
  * Un écran se déplace en glissant son nom ; sa position est mémorisée (bouton ⊞ : grille d'origine).
  */
-export function Canvas({ appUrl, isolateStories, stories, allStories, device, activeStory, errors, loaded, generations, flows, frames, onActivate, empty, reveal, children }: Props) {
+export function Canvas(props: Props) {
+  const { appUrl, isolateStories, stories, allStories, device, activeStory, errors, loaded, generations, flows, frames, onActivate, empty, reveal, children } = props;
+  const { page, onChangePage, onCreateParcours, flowMode, onFlowMode } = props;
   const viewport = useRef<HTMLDivElement>(null);
-  // Vue mémorisée : ni un rechargement ni l'ajout / le masquage d'un écran ne la réinitialisent.
-  const [view, setView] = useState<View>(() => readView() ?? { x: PADDING, y: PADDING, zoom: 0.75 });
-  const autoFitted = useRef(readView() !== null);
+  // Vue mémorisée par page : ni un rechargement ni l'ajout / le masquage d'un écran ne la réinitialisent.
+  const [view, setView] = useState<View>(() => readView(page.id) ?? { x: PADDING, y: PADDING, zoom: 0.75 });
+  const autoFitted = useRef(readView(page.id) !== null);
+  const viewPage = useRef(page.id);
   const [panning, setPanning] = useState(false);
   const drag = useRef<{ x: number; y: number; vx: number; vy: number } | null>(null);
 
@@ -105,8 +135,14 @@ export function Canvas({ appUrl, isolateStories, stories, allStories, device, ac
   const gridIndex = useMemo(() => new Map(stories.map((s, i) => [s.id, i])), [stories]);
 
   // Positions choisies à la main (coin haut gauche, nom compris) ; les autres écrans restent en grille.
-  const [positions, setPositions] = useState<Record<string, Point>>(() => readPositions(appUrl));
-  useEffect(() => writePositions(appUrl, positions), [appUrl, positions]);
+  const positions = page.positions;
+  const setPositions = useCallback(
+    (update: (p: Record<string, Point>) => Record<string, Point>) => onChangePage((pg) => ({ ...pg, positions: update(pg.positions) })),
+    [onChangePage],
+  );
+  const setGroups = useCallback((update: (g: BoardGroup[]) => BoardGroup[]) => onChangePage((pg) => ({ ...pg, groups: update(pg.groups) })), [onChangePage]);
+  const setNotes = useCallback((update: (n: BoardNote[]) => BoardNote[]) => onChangePage((pg) => ({ ...pg, notes: update(pg.notes) })), [onChangePage]);
+  const [editing, setEditing] = useState<string | null>(null);
   const positionOf = useCallback(
     (id: string): Point | null => {
       const i = gridIndex.get(id);
@@ -118,15 +154,32 @@ export function Canvas({ appUrl, isolateStories, stories, allStories, device, ac
 
   // Emprise des écrans affichés, pour « tout afficher » et le calque des flèches.
   const bounds = useMemo(() => {
-    const points = stories.map((s) => positionOf(s.id)).filter((p): p is Point => p !== null);
-    if (points.length === 0) return { x: 0, y: 0, width: 0, height: 0 };
-    const x = Math.min(...points.map((p) => p.x));
-    const y = Math.min(...points.map((p) => p.y));
-    return { x, y, width: Math.max(...points.map((p) => p.x)) + device.width - x, height: Math.max(...points.map((p) => p.y)) + device.height + LABEL - y };
-  }, [stories, positionOf, device]);
+    const boxes = [
+      ...stories.map((s) => positionOf(s.id)).filter((p): p is Point => p !== null).map((p) => ({ ...p, width: device.width, height: device.height + LABEL })),
+      ...page.groups,
+      ...page.notes.map((n) => ({ ...n, height: 120 })),
+    ];
+    if (boxes.length === 0) return { x: 0, y: 0, width: 0, height: 0 };
+    const x = Math.min(...boxes.map((b) => b.x));
+    const y = Math.min(...boxes.map((b) => b.y));
+    return { x, y, width: Math.max(...boxes.map((b) => b.x + b.width)) - x, height: Math.max(...boxes.map((b) => b.y + b.height)) - y };
+  }, [stories, positionOf, device, page.groups, page.notes]);
 
-  // Écran en cours de déplacement (glissé par son nom).
-  const moving = useRef<{ id: string; startX: number; startY: number; from: Point; moved: boolean } | null>(null);
+  // Groupe d'un écran : le plus petit cadre qui contient son centre.
+  const groupOfPoint = useCallback(
+    (point: Point) => page.groups.filter((g) => inside(point, g)).sort((a, b) => a.width * a.height - b.width * b.height)[0] ?? null,
+    [page.groups],
+  );
+  const groupOf = useCallback(
+    (id: string) => {
+      const p = positionOf(id);
+      return p ? (groupOfPoint({ x: p.x + device.width / 2, y: p.y + (device.height + LABEL) / 2 })?.id ?? null) : null;
+    },
+    [positionOf, groupOfPoint, device],
+  );
+
+  // Élément en cours de déplacement (écran par son nom, groupe par son titre, note).
+  const moving = useRef<Drag | null>(null);
   const [movingId, setMovingId] = useState<string | null>(null);
   const justMoved = useRef(false);
 
@@ -138,19 +191,23 @@ export function Canvas({ appUrl, isolateStories, stories, allStories, device, ac
       return p ? { x: p.x, y: p.y + LABEL, width: device.width, height: device.height } : null;
     });
   }, [flows, positionOf, device]);
+  const flowView = useMemo(
+    () => flowLayout && viewFlows(flowLayout, page.groups.length ? flowMode : 'all', groupOf, (id) => page.groups.find((g) => g.id === id) ?? null),
+    [flowLayout, flowMode, groupOf, page.groups],
+  );
 
   const fit = useCallback(() => {
     const el = viewport.current;
-    if (!el || stories.length === 0) return;
+    if (!el || bounds.width === 0) return;
     const { width, height } = el.getBoundingClientRect();
     const zoom = Math.min(1, (width - PADDING * 2) / bounds.width, (height - PADDING * 2) / bounds.height);
     setView({ zoom, x: (width - bounds.width * zoom) / 2 - bounds.x * zoom, y: Math.max(PADDING / 2, (height - bounds.height * zoom) / 2) - bounds.y * zoom });
-  }, [stories.length, bounds]);
+  }, [bounds]);
 
   // Retour à la grille d'origine, puis cadrage sur l'ensemble.
   const [regridded, setRegridded] = useState(0);
   const resetPositions = () => {
-    setPositions({});
+    setPositions(() => ({}));
     setRegridded((n) => n + 1);
   };
   useEffect(() => {
@@ -158,12 +215,29 @@ export function Canvas({ appUrl, isolateStories, stories, allStories, device, ac
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [regridded]);
 
-  const startMove = (e: React.PointerEvent, id: string) => {
+  const capture = (e: React.PointerEvent, drag: Drag) => {
     if (e.button !== 0) return;
-    const from = positionOf(id);
-    if (!from) return;
-    moving.current = { id, startX: e.clientX, startY: e.clientY, from, moved: false };
+    e.stopPropagation();
+    moving.current = drag;
     (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+  };
+  const startMove = (e: React.PointerEvent, id: string) => {
+    const from = positionOf(id);
+    if (from) capture(e, { kind: 'story', id, startX: e.clientX, startY: e.clientY, from, moved: false });
+  };
+  // Un groupe emporte les écrans, notes et groupes dont le centre est dedans.
+  const startGroupMove = (e: React.PointerEvent, group: BoardGroup) => {
+    if ((e.target as HTMLElement).closest('input, button')) return;
+    const center = (p: Point, w: number, h: number) => ({ x: p.x + w / 2, y: p.y + h / 2 });
+    const storiesIn = stories
+      .map((s) => [s.id, positionOf(s.id)] as const)
+      .filter((entry): entry is readonly [string, Point] => entry[1] !== null && inside(center(entry[1], device.width, device.height + LABEL), group))
+      .map(([id, p]) => [id, p] as [string, Point]);
+    const notesIn = page.notes.filter((n) => inside(center(n, n.width, 60), group)).map((n) => [n.id, { x: n.x, y: n.y }] as [string, Point]);
+    const groupsIn = page.groups
+      .filter((g) => g.id !== group.id && g.width * g.height < group.width * group.height && inside(center(g, g.width, g.height), group))
+      .map((g) => [g.id, { x: g.x, y: g.y }] as [string, Point]);
+    capture(e, { kind: 'group', id: group.id, startX: e.clientX, startY: e.clientY, from: { x: group.x, y: group.y }, moved: false, stories: storiesIn, notes: notesIn, groups: groupsIn });
   };
   const continueMove = (e: React.PointerEvent) => {
     const m = moving.current;
@@ -176,7 +250,29 @@ export function Canvas({ appUrl, isolateStories, stories, allStories, device, ac
       setMovingId(m.id);
     }
     const snap = (v: number) => (e.altKey ? v : Math.round(v / SNAP) * SNAP);
-    setPositions((p) => ({ ...p, [m.id]: { x: snap(m.from.x + dx), y: snap(m.from.y + dy) } }));
+    // Le déplacement aimanté de l'élément tiré s'applique tel quel à son contenu.
+    const ox = snap(m.from.x + dx) - m.from.x;
+    const oy = snap(m.from.y + dy) - m.from.y;
+    if (m.kind === 'story') setPositions((p) => ({ ...p, [m.id]: { x: m.from.x + ox, y: m.from.y + oy } }));
+    else if (m.kind === 'note') setNotes((ns) => ns.map((n) => (n.id === m.id ? { ...n, x: m.from.x + ox, y: m.from.y + oy } : n)));
+    else if (m.kind === 'resize') {
+      if (m.note) setNotes((ns) => ns.map((n) => (n.id === m.id ? { ...n, width: Math.max(120, m.from.x + ox) } : n)));
+      else setGroups((gs) => gs.map((g) => (g.id === m.id ? { ...g, width: Math.max(200, m.from.x + ox), height: Math.max(120, m.from.y + oy) } : g)));
+    } else {
+      const moved = new Map([[m.id, m.from], ...m.groups]);
+      onChangePage((pg) => ({
+        ...pg,
+        positions: { ...pg.positions, ...Object.fromEntries(m.stories.map(([id, p]) => [id, { x: p.x + ox, y: p.y + oy }])) },
+        notes: pg.notes.map((n) => {
+          const from = m.notes.find(([id]) => id === n.id)?.[1];
+          return from ? { ...n, x: from.x + ox, y: from.y + oy } : n;
+        }),
+        groups: pg.groups.map((g) => {
+          const from = moved.get(g.id);
+          return from ? { ...g, x: from.x + ox, y: from.y + oy } : g;
+        }),
+      }));
+    }
   };
   const endMove = () => {
     justMoved.current = Boolean(moving.current?.moved);
@@ -188,28 +284,62 @@ export function Canvas({ appUrl, isolateStories, stories, allStories, device, ac
   const fitFirstRow = useCallback(() => {
     const el = viewport.current;
     if (!el || stories.length === 0) return;
+    // Parcours : on cadre l'ensemble (il est rarement plus large qu'une rangée).
+    if (page.stories !== null) return fit();
     const { width, height } = el.getBoundingClientRect();
     const rowWidth = columns * cellWidth - GAP;
     const zoom = Math.min(1, (width - PADDING * 2) / rowWidth, (height - PADDING * 2) / (device.height + LABEL));
     setView({ zoom, x: (width - rowWidth * zoom) / 2, y: PADDING / 2 });
-  }, [stories.length, columns, cellWidth, device.height]);
+  }, [stories.length, columns, cellWidth, device.height, page.stories, fit]);
+
+  // Changement de page : on retrouve sa vue, ou on la cadre à sa première ouverture.
+  useLayoutEffect(() => {
+    if (viewPage.current === page.id) return;
+    writeView(viewPage.current, view);
+    viewPage.current = page.id;
+    const saved = readView(page.id);
+    autoFitted.current = saved !== null;
+    if (saved) setView(saved);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [page.id]);
 
   useLayoutEffect(() => {
     if (autoFitted.current || stories.length === 0) return;
     autoFitted.current = true;
     fitFirstRow();
-  }, [fitFirstRow, stories.length]);
+  }, [fitFirstRow, stories.length, page.id]);
 
   useEffect(() => {
-    const timer = window.setTimeout(() => {
-      try {
-        localStorage.setItem(VIEW_KEY, JSON.stringify(view));
-      } catch {
-        // Stockage indisponible : la vue n'est simplement pas mémorisée.
-      }
-    }, 300);
+    const timer = window.setTimeout(() => writeView(viewPage.current, view), 300);
     return () => window.clearTimeout(timer);
   }, [view]);
+
+  // Nouveau groupe autour de l'écran actif (s'il est sur la page), sinon au centre de la vue.
+  const viewCenter = () => {
+    const rect = viewport.current!.getBoundingClientRect();
+    return { x: (rect.width / 2 - view.x) / view.zoom, y: (rect.height / 2 - view.y) / view.zoom };
+  };
+  const addGroup = () => {
+    const active = activeStory ? positionOf(activeStory) : null;
+    const c = viewCenter();
+    const box = active
+      ? { x: active.x - 60, y: active.y - 100, width: device.width + 120, height: device.height + LABEL + 160 }
+      : { x: Math.round(c.x - cellWidth), y: Math.round(c.y - cellHeight / 2), width: cellWidth * 2, height: cellHeight + 60 };
+    const group: BoardGroup = { id: newId(), name: 'Nouveau groupe', color: GROUP_COLORS[page.groups.length % GROUP_COLORS.length], ...box };
+    setGroups((gs) => [...gs, group]);
+    setEditing(group.id);
+  };
+  const addNote = () => {
+    const c = viewCenter();
+    const note: BoardNote = { id: newId(), text: '', x: Math.round(c.x - 140), y: Math.round(c.y - 40), width: 280, color: 'yellow' };
+    setNotes((ns) => [...ns, note]);
+    setEditing(note.id);
+  };
+  const membersOf = (group: BoardGroup) =>
+    stories.filter((s) => {
+      const p = positionOf(s.id);
+      return p && groupOfPoint({ x: p.x + device.width / 2, y: p.y + (device.height + LABEL) / 2 })?.id === group.id;
+    });
 
   // Dès que l'écran demandé est dans la grille (manifeste rechargé), la vue le cadre.
   const revealed = useRef(0);
@@ -266,7 +396,9 @@ export function Canvas({ appUrl, isolateStories, stories, allStories, device, ac
   }, [zoomAt, fit, view.zoom]);
 
   const onPointerDown = (e: React.PointerEvent) => {
-    if (e.target !== e.currentTarget && !(e.target as HTMLElement).classList.contains('world')) return;
+    const target = e.target as HTMLElement;
+    if (e.target !== e.currentTarget && !target.classList.contains('world') && !target.classList.contains('board-group')) return;
+    if (editing && !target.closest('.note, .board-group-head')) setEditing(null);
     drag.current = { x: e.clientX, y: e.clientY, vx: view.x, vy: view.y };
     setPanning(true);
     (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
@@ -293,6 +425,9 @@ export function Canvas({ appUrl, isolateStories, stories, allStories, device, ac
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}
     >
+      {!empty && page.stories !== null && stories.length === 0 && (
+        <div className="canvas-hint">Parcours vide : cochez des écrans dans la liste de gauche pour les y ajouter.</div>
+      )}
       {empty && (
         <div className="canvas-empty">
           <h2>Aucun écran pour l'instant</h2>
@@ -304,6 +439,25 @@ export const Default = { props: {} };`}</pre>
         </div>
       )}
       <div className="world" style={{ transform: `translate(${view.x}px, ${view.y}px) scale(${view.zoom})` }}>
+        {page.groups.map((group) => (
+          <GroupFrame
+            key={group.id}
+            group={group}
+            zoom={view.zoom}
+            editing={editing === group.id}
+            leaving={flowView?.leaving.get(group.id) ?? []}
+            nameOf={(id) => page.groups.find((g) => g.id === id)?.name ?? 'hors groupe'}
+            onEdit={(on) => setEditing(on ? group.id : null)}
+            onChange={(patch) => setGroups((gs) => gs.map((g) => (g.id === group.id ? { ...g, ...patch } : g)))}
+            onRemove={() => setGroups((gs) => gs.filter((g) => g.id !== group.id))}
+            onParcours={() => onCreateParcours(group.name, membersOf(group).map((s) => s.id))}
+            members={membersOf(group).length}
+            onPointerDown={(e) => startGroupMove(e, group)}
+            onResizeDown={(e) => capture(e, { kind: 'resize', id: group.id, startX: e.clientX, startY: e.clientY, from: { x: group.width, y: group.height }, moved: false, note: false })}
+            onPointerMove={continueMove}
+            onPointerUp={endMove}
+          />
+        ))}
         {allStories.map((story) => {
           const p = positionOf(story.id);
           return (
@@ -353,7 +507,22 @@ export const Default = { props: {} };`}</pre>
             </section>
           );
         })}
-        {flowLayout && <FlowLayer layout={flowLayout} width={bounds.x + bounds.width} height={bounds.y + bounds.height} zoom={view.zoom} focus={hovered} />}
+        {page.notes.map((note) => (
+          <Note
+            key={note.id}
+            note={note}
+            editing={editing === note.id}
+            moving={movingId === note.id}
+            onEdit={(on) => setEditing(on ? note.id : null)}
+            onChange={(patch) => setNotes((ns) => ns.map((n) => (n.id === note.id ? { ...n, ...patch } : n)))}
+            onRemove={() => setNotes((ns) => ns.filter((n) => n.id !== note.id))}
+            onPointerDown={(e) => !(e.target as HTMLElement).closest('textarea, button') && capture(e, { kind: 'note', id: note.id, startX: e.clientX, startY: e.clientY, from: { x: note.x, y: note.y }, moved: false })}
+            onResizeDown={(e) => capture(e, { kind: 'resize', id: note.id, startX: e.clientX, startY: e.clientY, from: { x: note.width, y: 0 }, moved: false, note: true })}
+            onPointerMove={continueMove}
+            onPointerUp={endMove}
+          />
+        ))}
+        {flowView && <FlowLayer layout={flowView} groupFlows={flowView.groupFlows} width={bounds.x + bounds.width} height={bounds.y + bounds.height} zoom={view.zoom} focus={hovered} />}
       </div>
       {pending > 0 && (
         <div className="canvas-progress" role="status">
@@ -361,8 +530,16 @@ export const Default = { props: {} };`}</pre>
           Chargement des écrans · {stories.length - pending}/{stories.length}
         </div>
       )}
-      {flowLayout && <FlowLegend layout={flowLayout} />}
+      {flowLayout && flowView && <FlowLegend layout={flowLayout} view={flowView} mode={page.groups.length ? flowMode : 'all'} onMode={onFlowMode} hasGroups={page.groups.length > 0} parcours={page.stories !== null} />}
       {children}
+      <div className="board-tools" onPointerDown={(e) => e.stopPropagation()}>
+        <button onClick={addGroup} title="Cadre de couleur pour ranger des écrans (autour de l'écran actif s'il y en a un)">
+          ▢ Groupe
+        </button>
+        <button onClick={addNote} title="Bloc de texte libre">
+          ✎ Note
+        </button>
+      </div>
       <div className="zoom-controls">
         <button onClick={() => zoomAt(1 / 1.2, ...center())} aria-label="Dézoomer">−</button>
         <button onClick={fit} title="Tout afficher">{Math.round(view.zoom * 100)} %</button>
@@ -372,5 +549,134 @@ export const Default = { props: {} };`}</pre>
         </button>
       </div>
     </main>
+  );
+}
+
+interface GroupProps {
+  group: BoardGroup;
+  zoom: number;
+  editing: boolean;
+  members: number;
+  /** Liens qui sortent du groupe (mode Flux « Dans les groupes »). */
+  leaving: { to: string | null; count: number }[];
+  nameOf: (group: string) => string;
+  onEdit: (on: boolean) => void;
+  onChange: (patch: Partial<BoardGroup>) => void;
+  onRemove: () => void;
+  onParcours: () => void;
+  onPointerDown: (e: React.PointerEvent) => void;
+  onResizeDown: (e: React.PointerEvent) => void;
+  onPointerMove: (e: React.PointerEvent) => void;
+  onPointerUp: () => void;
+}
+
+/** Cadre de couleur : son titre se glisse (avec le contenu), son coin se tire pour le redimensionner. */
+function GroupFrame({ group, zoom, editing, members, leaving, nameOf, onEdit, onChange, onRemove, onParcours, onPointerDown, onResizeDown, onPointerMove, onPointerUp }: GroupProps) {
+  // Titre lisible quel que soit le zoom.
+  const scale = Math.min(4, 1 / zoom);
+  const nextColor = GROUP_COLORS[(GROUP_COLORS.indexOf(group.color) + 1) % GROUP_COLORS.length];
+  return (
+    <div className="board-group" data-color={group.color} style={{ left: group.x, top: group.y, width: group.width, height: group.height }}>
+      <div
+        className="board-group-head"
+        style={{ transform: `scale(${scale})`, maxWidth: group.width / scale }}
+        onPointerDown={onPointerDown}
+        onPointerMove={onPointerMove}
+        onPointerUp={onPointerUp}
+        onPointerCancel={onPointerUp}
+        onDoubleClick={() => onEdit(true)}
+        title="Glisser pour déplacer le groupe et son contenu · double-clic pour renommer"
+      >
+        {editing ? (
+          <input
+            autoFocus
+            defaultValue={group.name}
+            onFocus={(e) => e.target.select()}
+            onBlur={(e) => {
+              onChange({ name: e.target.value.trim() || 'Groupe' });
+              onEdit(false);
+            }}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' || e.key === 'Escape') (e.target as HTMLInputElement).blur();
+            }}
+          />
+        ) : (
+          <span className="board-group-name">{group.name}</span>
+        )}
+        <span className="muted">{members} écran{members > 1 ? 's' : ''}</span>
+        {leaving.map((l) => (
+          <span key={l.to ?? '-'} className="board-group-exit" title={`${l.count} lien(s) vers ${nameOf(l.to ?? '')}`}>
+            → {l.to ? nameOf(l.to) : 'hors groupe'} · {l.count}
+          </span>
+        ))}
+        <button className="board-color" data-color={nextColor} onClick={() => onChange({ color: nextColor })} title="Changer la couleur" aria-label="Changer la couleur" />
+        <button onClick={onParcours} disabled={members === 0} title="Créer un parcours (nouvelle page) avec les écrans de ce groupe">
+          ⇢ Parcours
+        </button>
+        <button onClick={onRemove} title="Supprimer le groupe (les écrans restent)" aria-label="Supprimer le groupe">
+          ×
+        </button>
+      </div>
+      <div className="board-resize" style={{ transform: `scale(${scale})` }} onPointerDown={onResizeDown} onPointerMove={onPointerMove} onPointerUp={onPointerUp} onPointerCancel={onPointerUp} title="Redimensionner" />
+    </div>
+  );
+}
+
+interface NoteProps {
+  note: BoardNote;
+  editing: boolean;
+  moving: boolean;
+  onEdit: (on: boolean) => void;
+  onChange: (patch: Partial<BoardNote>) => void;
+  onRemove: () => void;
+  onPointerDown: (e: React.PointerEvent) => void;
+  onResizeDown: (e: React.PointerEvent) => void;
+  onPointerMove: (e: React.PointerEvent) => void;
+  onPointerUp: () => void;
+}
+
+/** Note de texte libre : glisser pour la déplacer, double-clic pour l'écrire. */
+function Note({ note, editing, moving, onEdit, onChange, onRemove, onPointerDown, onResizeDown, onPointerMove, onPointerUp }: NoteProps) {
+  const nextColor = NOTE_COLORS[(NOTE_COLORS.indexOf(note.color) + 1) % NOTE_COLORS.length];
+  return (
+    <div
+      className={`note ${moving ? 'moving' : ''}`}
+      data-color={note.color}
+      style={{ left: note.x, top: note.y, width: note.width }}
+      onPointerDown={onPointerDown}
+      onPointerMove={onPointerMove}
+      onPointerUp={onPointerUp}
+      onPointerCancel={onPointerUp}
+      onDoubleClick={() => onEdit(true)}
+      title={editing ? undefined : 'Glisser pour déplacer · double-clic pour écrire'}
+    >
+      {editing ? (
+        <textarea
+          autoFocus
+          defaultValue={note.text}
+          placeholder="Écrivez une note…"
+          rows={Math.max(3, note.text.split('\n').length + 1)}
+          onBlur={(e) => {
+            const text = e.target.value;
+            // Note laissée vide à sa création : on ne la garde pas.
+            if (!text.trim() && !note.text) onRemove();
+            else onChange({ text });
+            onEdit(false);
+          }}
+          onKeyDown={(e) => {
+            if (e.key === 'Escape') (e.target as HTMLTextAreaElement).blur();
+          }}
+        />
+      ) : (
+        <div className="note-text">{note.text || <span className="muted">Note vide</span>}</div>
+      )}
+      <div className="note-actions">
+        <button className="board-color" data-color={nextColor} onClick={() => onChange({ color: nextColor })} title="Changer la couleur" aria-label="Changer la couleur" />
+        <button onClick={onRemove} title="Supprimer la note" aria-label="Supprimer la note">
+          ×
+        </button>
+      </div>
+      <div className="board-resize note-resize" onPointerDown={onResizeDown} onPointerMove={onPointerMove} onPointerUp={onPointerUp} onPointerCancel={onPointerUp} title="Élargir" />
+    </div>
   );
 }
