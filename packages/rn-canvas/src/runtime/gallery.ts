@@ -144,7 +144,19 @@ function Cell({ item, example, load }: { item: GalleryItem; example: ComponentEx
       h(
         Suspense,
         { fallback: h(Placeholder, { text: 'Chargement…' }) },
-        h(View, { pointerEvents: 'none', onLayout: (e: { nativeEvent: { layout: { height: number } }; target?: unknown }) => setEmpty(e.nativeEvent.layout.height < 2 && !hasVisibleContent(e.target)) }, h(Render, { load, item, example })),
+        h(
+          View,
+          {
+            pointerEvents: 'none',
+            onLayout: (e: { nativeEvent: { layout: { height: number }; target?: unknown }; target?: unknown }) => {
+              if (e.nativeEvent.layout.height >= 2) return setEmpty(false);
+              // Hauteur nulle : peut-être un contenu en position absolue, ou qui apparaît en animation.
+              const node = e.nativeEvent.target ?? e.target;
+              setTimeout(() => setEmpty(!hasVisibleContent(node)), 800);
+            },
+          },
+          h(Render, { load, item, example }),
+        ),
       ),
       empty ? h(Placeholder, { text: missing.length ? `Rien d'affiché sans données : ${missing.join(', ')}.` : "Rien d'affiché avec les valeurs d'exemple." }) : null,
     );
