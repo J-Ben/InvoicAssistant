@@ -168,36 +168,51 @@ export function Canvas(props: Props) {
     return { x, y, width: Math.max(...boxes.map((b) => b.x + b.width)) - x, height: Math.max(...boxes.map((b) => b.y + b.height)) - y };
   }, [stories, positionOf, device, page.groups, page.notes]);
 
-  // Palette ouverte à côté d'un écran : les écrans de sa rangée, du côté de la palette, glissent
-  // juste assez pour la laisser à découvert. Décalage visuel seulement (positions inchangées).
+  // Palette ouverte à côté d'un écran : ce qui est dans sa rangée, du côté de la palette (écrans,
+  // notes, groupes), glisse juste assez pour la laisser à découvert ; le groupe de l'écran
+  // s'élargit d'autant. Décalage visuel seulement : la disposition enregistrée ne change pas.
   const shifts = useMemo(() => {
+    const none = { stories: {} as Record<string, number>, notes: {} as Record<string, number>, groups: {} as Record<string, { dx: number; dw: number }> };
     const el = viewport.current;
     const p = isolate ? positionOf(isolate) : null;
-    if (!el || !p) return {} as Record<string, number>;
-    const left = p.x * view.zoom + view.x;
-    const right = (p.x + device.width) * view.zoom + view.x;
-    const side = paletteSide(left, right, 0, el.clientWidth);
+    if (!el || !p) return none;
+    const side = paletteSide(p.x * view.zoom + view.x, (p.x + device.width) * view.zoom + view.x, 0, el.clientWidth);
     const room = (PALETTE_GAP * 2 + PALETTE_WIDTH) / view.zoom;
     const top = p.y;
     const bottom = p.y + device.height + LABEL;
-    const row = stories
-      .filter((s) => s.id !== isolate)
-      .map((s) => ({ id: s.id, q: positionOf(s.id) }))
-      .filter((s): s is { id: string; q: Point } => s.q !== null && s.q.y < bottom && s.q.y + device.height + LABEL > top);
-    const out: Record<string, number> = {};
-    if (side === 'right') {
-      const next = row.filter((s) => s.q.x >= p.x + device.width / 2);
-      const gap = Math.min(...next.map((s) => s.q.x - (p.x + device.width)));
-      const shift = room - gap;
-      if (shift > 0) for (const s of next) out[s.id] = shift;
-    } else {
-      const previous = row.filter((s) => s.q.x + device.width <= p.x + device.width / 2);
-      const gap = Math.min(...previous.map((s) => p.x - (s.q.x + device.width)));
-      const shift = room - gap;
-      if (shift > 0) for (const s of previous) out[s.id] = -shift;
+    const pivot = p.x + device.width / 2;
+    const inRow = (y: number, height: number) => y < bottom && y + height > top;
+    // Côté de la palette : à droite, ce qui commence après le milieu de l'écran ; à gauche, ce qui finit avant.
+    const beyond = (x: number, width: number) => (side === 'right' ? x >= pivot : x + width <= pivot);
+    const distance = (x: number, width: number) => (side === 'right' ? x - (p.x + device.width) : p.x - (x + width));
+
+    const screens = stories
+      .filter((st) => st.id !== isolate)
+      .map((st) => ({ id: st.id, q: positionOf(st.id) }))
+      .filter((st): st is { id: string; q: Point } => st.q !== null && inRow(st.q.y, device.height + LABEL) && beyond(st.q.x, device.width));
+    const notes = page.notes.filter((n) => inRow(n.y, 120) && beyond(n.x, n.width));
+    const groups = page.groups.filter((g) => inRow(g.y, g.height));
+    const moved = groups.filter((g) => beyond(g.x, g.width));
+    // Groupe qui contient l'écran (il s'étend des deux côtés du milieu) : il s'élargit.
+    const around = groups.filter((g) => !beyond(g.x, g.width) && g.x < pivot && g.x + g.width > pivot);
+
+    const gap = Math.min(...screens.map((st) => distance(st.q.x, device.width)), ...notes.map((n) => distance(n.x, n.width)), ...moved.map((g) => distance(g.x, g.width)));
+    const shift = room - gap;
+    const out = none;
+    const signed = side === 'right' ? shift : -shift;
+    if (shift > 0) {
+      for (const st of screens) out.stories[st.id] = signed;
+      for (const n of notes) out.notes[n.id] = signed;
+      for (const g of moved) out.groups[g.id] = { dx: signed, dw: 0 };
+    }
+    for (const g of around) {
+      // Assez large pour garder la palette dedans, et suivre ce qui a glissé.
+      const margin = side === 'right' ? g.x + g.width - (p.x + device.width) : p.x - g.x;
+      const grow = Math.max(shift > 0 ? shift : 0, room - margin, 0);
+      if (grow > 0) out.groups[g.id] = { dx: side === 'right' ? 0 : -grow, dw: grow };
     }
     return out;
-  }, [isolate, positionOf, stories, view, device]);
+  }, [isolate, positionOf, stories, view, device, page.notes, page.groups]);
 
   // Groupe d'un écran : le plus petit cadre qui contient son centre.
   const groupOfPoint = useCallback(
@@ -477,6 +492,7 @@ export const Default = { props: {} };`}</pre>
           <GroupFrame
             key={group.id}
             group={group}
+            shift={shifts.groups[group.id]}
             zoom={view.zoom}
             editing={editing === group.id}
             leaving={flowView?.leaving.get(group.id) ?? []}
@@ -498,7 +514,7 @@ export const Default = { props: {} };`}</pre>
             <section
               key={story.id}
               className={`artboard ${activeStory === story.id ? 'active' : ''} ${movingId === story.id ? 'moving' : ''}`}
-              style={p === null ? { display: 'none', width: device.width } : { left: p.x, top: p.y, width: device.width, transform: shifts[story.id] ? `translateX(${shifts[story.id]}px)` : undefined }}
+              style={p === null ? { display: 'none', width: device.width } : { left: p.x, top: p.y, width: device.width, transform: shifts.stories[story.id] ? `translateX(${shifts.stories[story.id]}px)` : undefined }}
               onMouseEnter={() => setHovered(story.id)}
               onMouseLeave={() => setHovered((h) => (h === story.id ? null : h))}
             >
@@ -545,6 +561,7 @@ export const Default = { props: {} };`}</pre>
           <Note
             key={note.id}
             note={note}
+            shift={shifts.notes[note.id] ?? 0}
             editing={editing === note.id}
             moving={movingId === note.id}
             onEdit={(on) => setEditing(on ? note.id : null)}
@@ -588,6 +605,8 @@ export const Default = { props: {} };`}</pre>
 
 interface GroupProps {
   group: BoardGroup;
+  /** Décalage et élargissement temporaires (palette ouverte à côté d'un écran de la rangée). */
+  shift?: { dx: number; dw: number };
   zoom: number;
   editing: boolean;
   members: number;
@@ -605,12 +624,16 @@ interface GroupProps {
 }
 
 /** Cadre de couleur : son titre se glisse (avec le contenu), son coin se tire pour le redimensionner. */
-function GroupFrame({ group, zoom, editing, members, leaving, nameOf, onEdit, onChange, onRemove, onParcours, onPointerDown, onResizeDown, onPointerMove, onPointerUp }: GroupProps) {
+function GroupFrame({ group, shift, zoom, editing, members, leaving, nameOf, onEdit, onChange, onRemove, onParcours, onPointerDown, onResizeDown, onPointerMove, onPointerUp }: GroupProps) {
   // Titre lisible quel que soit le zoom.
   const scale = Math.min(4, 1 / zoom);
   const nextColor = GROUP_COLORS[(GROUP_COLORS.indexOf(group.color) + 1) % GROUP_COLORS.length];
   return (
-    <div className="board-group" data-color={group.color} style={{ left: group.x, top: group.y, width: group.width, height: group.height }}>
+    <div
+      className="board-group"
+      data-color={group.color}
+      style={{ left: group.x, top: group.y, width: group.width + (shift?.dw ?? 0), height: group.height, transform: shift?.dx ? `translateX(${shift.dx}px)` : undefined }}
+    >
       <div
         className="board-group-head"
         style={{ transform: `scale(${scale})`, maxWidth: group.width / scale }}
@@ -658,6 +681,8 @@ function GroupFrame({ group, zoom, editing, members, leaving, nameOf, onEdit, on
 
 interface NoteProps {
   note: BoardNote;
+  /** Décalage horizontal temporaire (palette ouverte à côté d'un écran de la rangée). */
+  shift: number;
   editing: boolean;
   moving: boolean;
   onEdit: (on: boolean) => void;
@@ -670,13 +695,13 @@ interface NoteProps {
 }
 
 /** Note de texte libre : glisser pour la déplacer, double-clic pour l'écrire. */
-function Note({ note, editing, moving, onEdit, onChange, onRemove, onPointerDown, onResizeDown, onPointerMove, onPointerUp }: NoteProps) {
+function Note({ note, shift, editing, moving, onEdit, onChange, onRemove, onPointerDown, onResizeDown, onPointerMove, onPointerUp }: NoteProps) {
   const nextColor = NOTE_COLORS[(NOTE_COLORS.indexOf(note.color) + 1) % NOTE_COLORS.length];
   return (
     <div
       className={`note ${moving ? 'moving' : ''}`}
       data-color={note.color}
-      style={{ left: note.x, top: note.y, width: note.width }}
+      style={{ left: note.x, top: note.y, width: note.width, transform: shift ? `translateX(${shift}px)` : undefined }}
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}

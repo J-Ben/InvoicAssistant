@@ -315,7 +315,7 @@ textarea { resize: vertical; }
 [data-color='yellow'] { --g: 247, 179, 0; }
 [data-color='pink'] { --g: 238, 70, 188; }
 [data-color='grey'] { --g: 120, 120, 135; }
-.board-group { position: absolute; border-radius: 28px; background: rgba(var(--g), 0.07); border: 2px solid rgba(var(--g), 0.35); }
+.board-group { position: absolute; transition: transform 0.28s cubic-bezier(0.2, 0.8, 0.2, 1), width 0.28s cubic-bezier(0.2, 0.8, 0.2, 1); border-radius: 28px; background: rgba(var(--g), 0.07); border: 2px solid rgba(var(--g), 0.35); }
 .board-group-head { position: absolute; z-index: 3; left: 0; bottom: 100%; transform-origin: 0 100%; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; padding: 0 0 8px 4px; white-space: nowrap; cursor: grab; touch-action: none; user-select: none; font-size: 14px; }
 .board-group-name { font-weight: 700; font-size: 16px; color: rgb(var(--g)); }
 .board-group-head input { font-size: 16px; font-weight: 700; padding: 2px 6px; width: 220px; border: 1px solid rgb(var(--g)); border-radius: 6px; background: var(--panel); color: var(--text); }
@@ -327,7 +327,7 @@ textarea { resize: vertical; }
 .board-color { width: 16px; height: 16px; min-width: 16px; padding: 0 !important; border-radius: 50% !important; background: rgb(var(--g)) !important; border: 2px solid var(--panel) !important; box-shadow: 0 0 0 1px var(--border); }
 .board-resize { position: absolute; z-index: 3; right: 0; bottom: 0; width: 22px; height: 22px; transform-origin: 100% 100%; cursor: nwse-resize; touch-action: none; border-right: 3px solid rgba(var(--g), 0.6); border-bottom: 3px solid rgba(var(--g), 0.6); border-bottom-right-radius: 26px; }
 
-.note { position: absolute; z-index: 1; min-height: 60px; padding: 14px 16px; border-radius: 6px; background: color-mix(in srgb, rgb(var(--g)) 22%, var(--panel)); color: var(--text); box-shadow: 0 2px 4px rgb(0 0 0 / 0.08), 0 8px 20px rgb(0 0 0 / 0.1); cursor: grab; touch-action: none; font-size: 18px; line-height: 1.45; }
+.note { position: absolute; z-index: 1; transition: transform 0.28s cubic-bezier(0.2, 0.8, 0.2, 1); min-height: 60px; padding: 14px 16px; border-radius: 6px; background: color-mix(in srgb, rgb(var(--g)) 22%, var(--panel)); color: var(--text); box-shadow: 0 2px 4px rgb(0 0 0 / 0.08), 0 8px 20px rgb(0 0 0 / 0.1); cursor: grab; touch-action: none; font-size: 18px; line-height: 1.45; }
 .note.moving { cursor: grabbing; box-shadow: 0 12px 32px rgb(0 0 0 / 0.2); }
 .note[data-color='yellow'] { --g: 255, 214, 10; }
 .note-text { white-space: pre-wrap; overflow-wrap: anywhere; user-select: none; }
@@ -373,3 +373,5 @@ textarea { resize: vertical; }
 .sel-token { aspect-ratio: 1; border-radius: 5px; border: 1px solid var(--border); cursor: pointer; padding: 0; }
 .sel-token.on { outline: 2px solid var(--accent); outline-offset: 1px; }
 .sel-popover .link { margin-top: 8px; }
+/* Pendant un glisser (écran, groupe, note, redimensionnement), pas d'animation : le contenu suit le pointeur. */
+.canvas.panning .board-group, .canvas.panning .note, .canvas.panning .artboard { transition: none; }
