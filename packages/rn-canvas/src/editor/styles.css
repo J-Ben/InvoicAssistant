@@ -279,8 +279,8 @@ textarea { resize: vertical; }
 .artboard.moving .frame { box-shadow: 0 8px 16px rgb(0 0 0 / 0.12), 0 24px 60px rgb(0 0 0 / 0.22); }
 .zoom-controls button:disabled { opacity: 0.35; cursor: default; }
 
-.library-bar { position: absolute; left: 50%; bottom: 14px; transform: translateX(-50%); z-index: 5; display: flex; align-items: center; gap: 2px; padding: 4px; border-radius: 12px; background: var(--panel); border: 1px solid var(--border); box-shadow: 0 8px 24px rgb(0 0 0 / 0.16); cursor: default; }
-.library-tool { display: flex; align-items: center; gap: 6px; padding: 6px 10px; border: 0; border-radius: 8px; background: none; color: var(--text); font-size: 12px; white-space: nowrap; cursor: pointer; }
+.library-bar { position: absolute; left: 50%; bottom: 10px; transform: translateX(-50%); z-index: 5; display: flex; align-items: center; gap: 1px; padding: 3px; border-radius: 10px; background: var(--panel); border: 1px solid var(--border); box-shadow: 0 8px 24px rgb(0 0 0 / 0.16); cursor: default; }
+.library-tool { display: flex; align-items: center; gap: 5px; padding: 4px 8px; border: 0; border-radius: 7px; background: none; color: var(--text); font-size: 11px; white-space: nowrap; cursor: pointer; }
 .library-tool:hover, .library-tool.on { background: var(--bg); }
 .library-tool[aria-disabled="true"] { opacity: 0.5; }
 .library-icon { display: inline-grid; place-items: center; width: 18px; height: 18px; border-radius: 4px; background: var(--bg); font-weight: 700; font-size: 11px; }
@@ -375,3 +375,22 @@ textarea { resize: vertical; }
 .sel-popover .link { margin-top: 8px; }
 /* Pendant un glisser (écran, groupe, note, redimensionnement), pas d'animation : le contenu suit le pointeur. */
 .canvas.panning .board-group, .canvas.panning .note, .canvas.panning .artboard { transition: none; }
+
+/* Barre du bas compacte : outils rapides en icônes (nom au survol et en info-bulle). */
+.library-tool.quick { padding: 4px; }
+.library-tool.quick .library-label { display: none; }
+.library-tool.quick:hover .library-label { display: inline; padding-right: 4px; }
+.library-separator { height: 16px; }
+
+/* Menu Affichage */
+.display-menu { position: relative; }
+.display-menu > button { border: 0; background: var(--input); border-radius: 6px; padding: 4px 10px; cursor: pointer; color: var(--text); white-space: nowrap; }
+.display-menu > button.on { background: var(--bg); box-shadow: inset 0 0 0 1px var(--border); }
+.display-popover { position: absolute; top: calc(100% + 6px); left: 0; z-index: 50; width: 300px; padding: 8px; border-radius: 10px; background: var(--panel); border: 1px solid var(--border); box-shadow: 0 12px 32px rgb(0 0 0 / 0.18); display: flex; flex-direction: column; gap: 2px; }
+.display-option { display: flex; align-items: flex-start; gap: 8px; padding: 5px 6px; border-radius: 6px; font-size: 12px; cursor: pointer; }
+.display-option:hover { background: var(--bg); }
+.display-option input { margin-top: 2px; }
+.display-popover .link-button { align-self: flex-start; margin: 4px 6px 0; border: 0; background: none; padding: 0; color: var(--accent); cursor: pointer; font-size: 12px; }
+.board-tools[hidden] { display: none !important; }
+.artboard-label.hidden-label { opacity: 0; }
+.artboard:hover .artboard-label.hidden-label { opacity: 1; }

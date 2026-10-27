@@ -101,6 +101,12 @@ interface Props {
   frames: Map<string, HTMLIFrameElement>;
   onActivate: (id: string) => void;
   empty: boolean;
+  /** Clic dans le vide du canevas (sans glisser). */
+  onBackgroundClick?: () => void;
+  /** Outils Groupe / Note et zoom (menu Affichage). */
+  showBoardTools?: boolean;
+  /** Noms au-dessus des écrans (menu Affichage). */
+  showLabels?: boolean;
   /** Écran à amener au centre de la vue (nouvel écran de composant) ; `seq` change à chaque demande. */
   reveal?: { id: string; seq: number } | null;
   /** Page affichée : disposition, groupes et notes. */
@@ -122,7 +128,7 @@ interface Props {
  */
 export function Canvas(props: Props) {
   const { appUrl, isolateStories, stories, allStories, device, activeStory, errors, loaded, generations, flows, frames, onActivate, empty, reveal, children } = props;
-  const { page, onChangePage, onCreateParcours, flowMode, onFlowMode, isolate } = props;
+  const { page, onChangePage, onCreateParcours, flowMode, onFlowMode, isolate, onBackgroundClick, showBoardTools = true, showLabels = true } = props;
   const viewport = useRef<HTMLDivElement>(null);
   // Vue mémorisée par page : ni un rechargement ni l'ajout / le masquage d'un écran ne la réinitialisent.
   const [view, setView] = useState<View>(() => readView(page.id) ?? { x: PADDING, y: PADDING, zoom: 0.75 });
@@ -456,9 +462,12 @@ export function Canvas(props: Props) {
     const d = drag.current;
     if (d) setView((v) => ({ ...v, x: d.vx + e.clientX - d.x, y: d.vy + e.clientY - d.y }));
   };
-  const onPointerUp = () => {
+  const onPointerUp = (e: React.PointerEvent) => {
+    const d = drag.current;
     drag.current = null;
     setPanning(false);
+    // Un clic (sans déplacement) dans le vide, pas un glissement du canevas : désélection.
+    if (d && Math.hypot(e.clientX - d.x, e.clientY - d.y) < 4) onBackgroundClick?.();
   };
 
   const center = () => {
@@ -519,7 +528,7 @@ export const Default = { props: {} };`}</pre>
               onMouseLeave={() => setHovered((h) => (h === story.id ? null : h))}
             >
               <button
-                className="artboard-label"
+                className={`artboard-label ${showLabels ? '' : 'hidden-label'}`}
                 onPointerDown={(e) => startMove(e, story.id)}
                 onPointerMove={continueMove}
                 onPointerUp={endMove}
@@ -583,7 +592,7 @@ export const Default = { props: {} };`}</pre>
       )}
       {flowLayout && flowView && <FlowLegend layout={flowLayout} view={flowView} mode={page.groups.length ? flowMode : 'all'} onMode={onFlowMode} hasGroups={page.groups.length > 0} parcours={page.stories !== null} />}
       {children}
-      <div className="board-tools" onPointerDown={(e) => e.stopPropagation()}>
+      <div className="board-tools" hidden={!showBoardTools} onPointerDown={(e) => e.stopPropagation()}>
         <button onClick={addGroup} title="Cadre de couleur pour ranger des écrans (autour de l'écran actif s'il y en a un)">
           ▢ Groupe
         </button>

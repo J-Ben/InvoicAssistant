@@ -13,6 +13,7 @@ import { SelectionToolbar } from './SelectionToolbar.tsx';
 import { defaultTarget, mergedStyle, styleEntries } from './styleModel.ts';
 import { numberOf } from './fields.tsx';
 import type { FlowMode } from './Flows.tsx';
+import { DisplayMenu, useDisplay } from './display.tsx';
 
 type ThemePref = 'system' | 'light' | 'dark';
 /** Version et date de construction, injectées par build.mjs. */
@@ -60,6 +61,7 @@ export function App() {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [hidden, setHidden] = useState<Set<string>>(new Set());
   const [mode, setMode] = useState<CanvasMode>('inspect');
+  const [display, setDisplay, resetDisplay] = useDisplay();
   const [device, setDevice] = useState<Device>(DEVICES[0]);
   const [trees, setTrees] = useState<Record<string, LayerNode[]>>({});
   const [storyErrors, setStoryErrors] = useState<Record<string, string>>({});
@@ -331,11 +333,25 @@ export function App() {
       if (e.key === 'Escape') {
         setSelection(null);
         send(null, { type: 'select', loc: null });
+      } else if (e.key === '\\' && (e.metaKey || e.ctrlKey)) {
+        // ⌘\ : masquer les deux panneaux pour ne garder que les écrans (ou les réafficher).
+        e.preventDefault();
+        const show = !(displayRef.current.leftPanel || displayRef.current.rightPanel);
+        setDisplay('leftPanel', show);
+        setDisplay('rightPanel', show);
       } else if (e.key === 'v') setMode('inspect');
       else if (e.key === 'i') setMode('interact');
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
+  }, [send, setDisplay]);
+  const displayRef = useRef(display);
+  displayRef.current = display;
+
+  /** Clic dans le vide du canevas : on sort de la sélection (palette, poignées, inspecteur). */
+  const clearSelection = useCallback(() => {
+    setSelection(null);
+    send(null, { type: 'select', loc: null });
   }, [send]);
 
   const selectLoc = useCallback(
@@ -414,7 +430,8 @@ export function App() {
   useEffect(() => {
     const target = selection?.inspect;
     if (!selection || !target || target.loc !== selection.info.loc) return;
-    const editable = target.style.editable;
+    // Poignées masquées (menu Affichage) : aucune n'est proposée.
+    const editable = target.style.editable && display.handles;
     const merged = mergedStyle(target.style.sources);
     send(selection.story, {
       type: 'handles',
@@ -426,10 +443,10 @@ export function App() {
         gap: editable,
         width: editable && merged.has('width'),
         height: editable && merged.has('height'),
-        text: Boolean(target.text?.editable),
+        text: display.handles && Boolean(target.text?.editable),
       },
     });
-  }, [selection, send]);
+  }, [selection, send, display.handles]);
 
   // Position de la sélection dans son écran, pour la barre flottante.
   const [selectionRect, setSelectionRect] = useState<{ story: string; loc: string; rect: Rect | null } | null>(null);
@@ -560,6 +577,7 @@ export function App() {
 
   // Palette contextuelle à côté de l'écran de la sélection (mode Sélection).
   const paletteVisible = Boolean(
+    display.palette &&
     mode === 'inspect' &&
       tab.state === 'owner' &&
       selection?.inspect &&
@@ -580,7 +598,7 @@ export function App() {
   if (!project) return <div className="empty-state">Chargement…</div>;
 
   return (
-    <div className="app">
+    <div className="app" style={{ gridTemplateColumns: `${display.leftPanel ? '260px' : '0'} 1fr ${display.rightPanel ? '320px' : '0'}` }}>
       <header className="topbar">
         <div className="brand">
           <span className="logo">◆</span> rn-canvas <span className="muted">/ {project.name}</span>
@@ -599,6 +617,7 @@ export function App() {
             ⇢ Flux
           </button>
         </div>
+        <DisplayMenu display={display} onChange={setDisplay} onReset={resetDisplay} />
         <div className="history" role="group" aria-label="Historique">
           <button disabled={!history.undo} onClick={() => travel('undo')} title={history.undo ? `Annuler ${history.undo} (⌘Z)` : 'Rien à annuler'}>
             ↶
@@ -625,7 +644,7 @@ export function App() {
         </label>
       </header>
 
-      <Sidebar
+      {display.leftPanel && <Sidebar
         onOpenComponent={openComponentScreen}
         onLayerContextMenu={(loc, x, y) => {
           if (!activeStory) return;
@@ -656,7 +675,7 @@ export function App() {
         selection={selection}
         onEdit={edit}
         onSaveVariant={saveVariant}
-      />
+      />}
 
       {tab.state !== 'owner' ? (
         <main className="canvas">
@@ -701,20 +720,23 @@ export function App() {
           frames={frames.current}
           onActivate={setActiveStory}
           empty={stories.length === 0}
+          onBackgroundClick={clearSelection}
+          showBoardTools={display.boardTools}
+          showLabels={display.storyLabels}
         >
-          <PagesBar
+          {display.pagesBar && <PagesBar
             board={board}
             page={page}
             onSelect={boardState.setPageId}
             onAdd={(name) => boardState.addPage(name)}
             onRename={(id, name) => boardState.updatePage(id, (p) => ({ ...p, name }))}
             onRemove={boardState.removePage}
-          />
-          <LibraryBar components={project.components} target={insertTargetLabel} onInsert={insertComponent} onOpenComponent={openComponentScreen} appUrl={project.appUrl} isolateStories={project.isolateStories} />
+          />}
+          {display.libraryBar && <LibraryBar components={project.components} target={insertTargetLabel} onInsert={insertComponent} onOpenComponent={openComponentScreen} appUrl={project.appUrl} isolateStories={project.isolateStories} />}
         </Canvas>
       )}
 
-      <Inspector
+      {display.rightPanel && <Inspector
         selection={selection}
         theme={project.theme}
         root={project.root}
@@ -722,7 +744,7 @@ export function App() {
         onEdit={edit}
         target={styleTarget}
         onTarget={(t) => selection?.inspect && setTargets((all) => ({ ...all, [selection.inspect!.loc]: t }))}
-      />
+      />}
 
       {paletteVisible && selection?.inspect && selectionRect?.rect && (
           <SelectionToolbar

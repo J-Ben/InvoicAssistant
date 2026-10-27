@@ -84,7 +84,8 @@ export function LibraryBar({ components, target, onInsert, onOpenComponent, appU
       {quick.map((q) => (
         <button
           key={q.label}
-          className="library-tool"
+          className="library-tool quick"
+          aria-label={q.label}
           draggable
           onDragStart={(e) => startComponentDrag(e, q.component!)}
           onDragEnd={endComponentDrag}
@@ -93,7 +94,7 @@ export function LibraryBar({ components, target, onInsert, onOpenComponent, appU
           title={`${q.label} : <${q.component!.name}> · ${hint} (ou glissez-le sur un écran)`}
         >
           <span className="library-icon">{q.icon}</span>
-          {q.label}
+          <span className="library-label">{q.label}</span>
         </button>
       ))}
       {groups.length > 0 && <span className="library-separator" />}
@@ -108,7 +109,7 @@ export function LibraryBar({ components, target, onInsert, onOpenComponent, appU
             setOpen(open === g.key ? null : g.key);
           }}
         >
-          {g.label} <span className="muted">{g.items.length}</span> ▴
+          {g.label} <span className="muted">{g.items.length}</span>
         </button>
       ))}
       <div className={`library-popover ${showPreviews ? 'wide' : ''}`} role="menu" hidden={!current}>
