@@ -141,6 +141,25 @@ function importedPackages(root: string, dirs: string[]): Set<string> {
   return names;
 }
 
+/**
+ * Commande d'installation avec la version qu'attend l'Expo installé (bundledNativeModules.json, ou
+ * dépendances du paquet expo). Sans réseau, `npx expo install` peut prendre la dernière version
+ * publiée au lieu de celle du SDK : une version explicite évite ce piège.
+ */
+export function installCommand(root: string, names: string[], dev = false): string {
+  const bundled = readJson(path.join(root, 'node_modules/expo/bundledNativeModules.json')) ?? {};
+  const expoDeps = readJson(path.join(root, 'node_modules/expo/package.json'))?.dependencies ?? {};
+  const specs = names.map((n) => (bundled[n] ?? expoDeps[n] ? `${n}@${bundled[n] ?? expoDeps[n]}` : n));
+  const manager = exists(root, 'yarn.lock') ? 'yarn add' : exists(root, 'pnpm-lock.yaml') ? 'pnpm add' : exists(root, 'bun.lockb') || exists(root, 'bun.lock') ? 'bun add' : 'npm install';
+  return `${manager}${dev ? (manager === 'npm install' ? ' -D' : ' -D') : ''} ${specs.join(' ')}`;
+}
+
+/** Version attendue par l'Expo installé, s'il en impose une. */
+function expectedVersion(root: string, name: string): string | null {
+  const bundled = readJson(path.join(root, 'node_modules/expo/bundledNativeModules.json')) ?? {};
+  return bundled[name] ?? readJson(path.join(root, 'node_modules/expo/package.json'))?.dependencies?.[name] ?? null;
+}
+
 export function diagnose(root: string): Check[] {
   const checks: Check[] = [];
   const add = (level: Level, title: string, extra: Omit<Check, 'level' | 'title'> = {}) => checks.push({ level, title, ...extra });
@@ -172,7 +191,7 @@ export function diagnose(root: string): Check[] {
   }
   add('ok', `Expo SDK ${expoPkg.version.split('.')[0]}`);
   const bundled = readJson(path.join(root, 'node_modules/expo/bundledNativeModules.json')) ?? {};
-  const expoInstall = (names: string[]) => `npx expo install ${names.join(' ')}`;
+  const expoInstall = (names: string[]) => installCommand(root, names);
 
   // Support web
   const webDeps = ['react-dom', 'react-native-web', '@expo/metro-runtime'];
@@ -190,7 +209,15 @@ export function diagnose(root: string): Check[] {
   if (!babelFile) add('error', 'Pas de configuration Babel : le plugin rn-canvas n’est pas chargé', { fix: 'npx rn-canvas init' });
   else if (!read(root, babelFile).includes('rn-canvas/babel')) add('error', `${babelFile} ne charge pas le plugin rn-canvas`, { fix: `Ajoutez 'rn-canvas/babel' à la liste plugins de ${babelFile} (avant react-native-reanimated/plugin s'il est présent).` });
   else add('ok', `Plugin Babel chargé (${babelFile})`);
-  if (babelFile && !deps['babel-preset-expo']) add('warn', 'babel-preset-expo n’est pas une dépendance directe', { detail: 'Un babel.config.js explicite doit pouvoir le résoudre depuis la racine.', fix: `${expoInstall(['babel-preset-expo'])} -- --save-dev` });
+  if (babelFile && !deps['babel-preset-expo']) add('warn', 'babel-preset-expo n’est pas une dépendance directe', { detail: 'Un babel.config.js explicite doit pouvoir le résoudre depuis la racine.', fix: installCommand(root, ['babel-preset-expo'], true) });
+  else if (babelFile) {
+    // Une version d'un autre SDK (installée sans réseau, par exemple) casse la résolution des modules d'Expo.
+    const wanted = expectedVersion(root, 'babel-preset-expo');
+    const installed = readJson(path.join(root, 'node_modules/babel-preset-expo/package.json'))?.version as string | undefined;
+    if (wanted && installed && installed.split('.')[0] !== wanted.replace(/^[~^]/, '').split('.')[0]) {
+      add('error', `babel-preset-expo ${installed} ne correspond pas à ce SDK (attendu ${wanted})`, { fix: installCommand(root, ['babel-preset-expo'], true) });
+    }
+  }
 
   // Metro
   const metroFile = ['metro.config.js', 'metro.config.cjs'].find((f) => exists(root, f));

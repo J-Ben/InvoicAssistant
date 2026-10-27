@@ -36,7 +36,7 @@ function Inner() {
 }
 
 export default function RootLayout() {
-  const [loaded] = useFonts({ Inter: 1 });
+  const [loaded] = useFonts({ Inter: require('../assets/Inter.ttf') });
   const session = useSession();
   if (!loaded) return null;
   if (!session.ready) return <Splash />;
@@ -59,12 +59,18 @@ export default function RootLayout() {
   assert.ok(code.includes(`import { QueryClient, QueryClientProvider } from '@tanstack/react-query';`), code);
   assert.ok(code.includes(`import { ThemeProvider } from './src/theme';`), code);
   assert.ok(code.includes('const queryClient = new QueryClient();'));
-  assert.ok(code.includes('const [loaded] = useFonts({ Inter: 1 });\n  if (!loaded) return null;'), code);
-  assert.ok(code.includes('<ThemeProvider mode="light">'), code);
+  // Chemin relatif recalculé depuis la racine (où est rn-canvas.config.tsx).
+  assert.ok(code.includes(`const [loaded] = useFonts({ Inter: require('./assets/Inter.ttf') });`), code);
+  assert.ok(code.includes('if (!loaded) return null;'), code);
+  // Variable du layout utilisée par une prop : son hook est repris (il s'exécutait déjà au-dessus des fournisseurs).
+  assert.ok(code.includes('const session = useSession();'), code);
+  assert.ok(code.includes(`import { useSession } from './src/auth';`), code);
+  assert.ok(code.includes('<ThemeProvider mode="light" user={session.user}>'), code);
   assert.ok(!code.includes('StatusBar') && !code.includes('Splash') && !code.includes('Stack'), code);
-  assert.equal(proposal.todo.length, 2);
-  assert.match(proposal.todo.join('\n'), /« user » dépend de session/);
-  assert.match(proposal.todo.join('\n'), /session\.ready/);
+  // La condition propre à l'app (session prête) n'est pas reprise : elle masquerait les écrans.
+  assert.ok(!code.includes('if (!session.ready)'), code);
+  assert.equal(proposal.todo.length, 1);
+  assert.match(proposal.todo[0], /session\.ready/);
 });
 
 test('fournisseurs : App.tsx sans expo-router, arrêt sur NavigationContainer', () => {

@@ -66,9 +66,28 @@ export function proposeProviders(root: string, layoutFile: string, configFile = 
       for (const n of freeNames(decl)) if (module.imports.has(n)) needed.add(n);
     }
   };
-  const available = (name: string) => module.imports.has(name) || module.declarations.has(name);
+  const finalIndex = body.indexOf(finalReturn);
+  // Variables du corps du layout (avant son return) : `const scheme = useColorScheme()`… Ses hooks
+  // s'exécutent déjà au-dessus de ses fournisseurs : les reprendre dans Providers ne change rien.
+  const locals = new Map<string, AstNode>();
+  for (const stmt of body.slice(0, finalIndex)) {
+    if (stmt.type !== 'VariableDeclaration') continue;
+    for (const d of stmt.declarations) walk(d.id, (n) => void (n.type === 'Identifier' && locals.set(n.name, stmt)));
+  }
+  const kept = new Set<AstNode>();
+  const keep = (stmt: AstNode) => {
+    if (kept.has(stmt)) return;
+    kept.add(stmt);
+    for (const n of freeNames(stmt)) use(n);
+  };
+  const use = (n: string) => {
+    if (module.imports.has(n)) needed.add(n);
+    else if (locals.has(n)) keep(locals.get(n)!);
+    else if (module.declarations.has(n)) copy(n);
+  };
+  const available = (name: string) => module.imports.has(name) || module.declarations.has(name) || locals.has(name);
 
-  // Attributs : repris s'ils ne dépendent que du module (imports, constantes du fichier).
+  // Attributs : repris avec ce dont ils dépendent (imports, constantes du fichier, variables du layout).
   const elements = wrappers.map((el) => {
     const name = jsxName(el.openingElement.name)!;
     needed.add(name.split('.')[0]);
@@ -81,29 +100,17 @@ export function proposeProviders(root: string, layoutFile: string, configFile = 
       const names = attr.value ? freeNames(attr.value) : [];
       const missing = names.filter((n) => !available(n));
       if (missing.length) {
-        todo.push(`<${name}> : la prop « ${attr.name.name} » dépend de ${missing.join(', ')}, calculé${missing.length > 1 ? 's' : ''} dans ${layoutFile}.`);
+        todo.push(`<${name}> : la prop « ${attr.name.name} » dépend de ${missing.join(', ')}, introuvable${missing.length > 1 ? 's' : ''} dans ${layoutFile}.`);
         continue;
       }
-      for (const n of names) {
-        if (module.imports.has(n)) needed.add(n);
-        else copy(n);
-      }
+      for (const n of names) use(n);
       attributes.push(codeOf(src, attr));
     }
     return { name, attributes };
   });
 
-  // Conditions d'attente (`if (!fontsLoaded) return null;`) qui ne dépendent que de hooks de paquets.
-  // Blocs copiés depuis le corps du layout, réindentés pour celui de Providers.
-  const gates: string[] = [];
-  const block = (node: AstNode) => {
-    const shift = node.loc.start.column - 2;
-    return codeOf(src, node)
-      .split('\n')
-      .map((line, i) => (i === 0 || shift === 0 ? line : shift > 0 ? line.replace(new RegExp(`^ {0,${shift}}`), '') : ' '.repeat(-shift) + line))
-      .join('\n');
-  };
-  const finalIndex = body.indexOf(finalReturn);
+  // Conditions d'attente (`if (!fontsLoaded) return null;`) qui ne dépendent que de hooks de paquets :
+  // une condition propre à l'app (session, verrouillage) masquerait les écrans.
   for (const stmt of body.slice(0, finalIndex)) {
     if (stmt.type !== 'IfStatement' || !returnsOnly(stmt.consequent) || stmt.alternate) continue;
     const names = freeNames(stmt.test);
@@ -113,14 +120,27 @@ export function proposeProviders(root: string, layoutFile: string, configFile = 
       todo.push(`Condition « ${codeOf(src, stmt.test)} » du layout non reprise (elle dépend de l'app).`);
       continue;
     }
-    for (const decl of decls) {
-      if (gates.includes(block(decl!))) continue;
-      gates.push(block(decl!));
-      for (const n of freeNames(decl!)) if (module.imports.has(n)) needed.add(n);
-      for (const n of freeNames(decl!)) if (!module.imports.has(n) && module.declarations.has(n)) copy(n);
-    }
-    gates.push(block(stmt));
+    for (const decl of decls) keep(decl!);
+    kept.add(stmt);
   }
+
+  // Code copié : réindenté pour le corps de Providers, chemins relatifs recalculés depuis la configuration.
+  const relocate = (text: string) =>
+    text.replace(/\b(require|import)\((['"])(\.{1,2}\/[^'"]+)\2\)/g, (_m, fn: string, q: string, rel: string) => {
+      let next = path.relative(path.resolve(root, path.dirname(configFile)), path.resolve(root, path.dirname(layoutFile), rel)).split(path.sep).join('/');
+      if (!next.startsWith('.')) next = `./${next}`;
+      return `${fn}(${q}${next}${q})`;
+    });
+  const block = (node: AstNode) => {
+    const shift = node.loc.start.column - 2;
+    return relocate(
+      codeOf(src, node)
+        .split('\n')
+        .map((line, i) => (i === 0 || shift === 0 ? line : shift > 0 ? line.replace(new RegExp(`^ {0,${shift}}`), '') : ' '.repeat(-shift) + line))
+        .join('\n'),
+    );
+  };
+  const gates = body.filter((stmt) => kept.has(stmt)).map(block);
 
   const imports = importLines(src, module, needed, root, layoutFile, configFile);
   const indent = (depth: number) => '  '.repeat(depth);
@@ -130,7 +150,7 @@ export function proposeProviders(root: string, layoutFile: string, configFile = 
   const output = `import React from 'react';
 ${imports.join('\n')}
 import type { CanvasRuntimeConfig } from 'rn-canvas/runtime';${examplesImport ? `\nimport { generatedExamples } from '${examplesImport}';` : ''}
-${copied.length ? `\n${copied.map((d) => codeOf(src, d)).join('\n\n')}\n` : ''}
+${copied.length ? `\n${copied.map((d) => relocate(codeOf(src, d))).join('\n\n')}\n` : ''}
 /**
  * Fournisseurs communs aux écrans affichés dans rn-canvas, repris de ${layoutFile}
  * (sans la navigation ni ce qui s'affiche à côté : splash, verrouillage, barre d'état…).${todo.length ? `\n *\n * À compléter :\n${todo.map((t) => ` * - ${t}`).join('\n')}` : ''}

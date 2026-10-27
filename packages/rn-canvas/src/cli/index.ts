@@ -16,7 +16,7 @@ import { fileURLToPath } from 'node:url';
 import { startServer } from '../server/http.ts';
 import { serveMcp } from '../server/mcp.ts';
 import { CONFIG_FILE, Project } from '../server/project.ts';
-import { diagnose, printChecks } from './doctor.ts';
+import { diagnose, installCommand, printChecks } from './doctor.ts';
 import { addBabelPlugin } from './patch.ts';
 import { proposeProviders, rootLayoutFile } from '../server/scaffold.ts';
 import { examplesFile } from '../server/examples.ts';
@@ -212,7 +212,8 @@ function init() {
     const theme = findThemeFile();
     const config: Record<string, unknown> = { appUrl: 'http://localhost:8081' };
     // Avec expo-router, tout fichier de app/ devient une route : les stories vont dans canvas/.
-    if (pkg.dependencies?.['expo-router']) config.include = ['src', 'canvas'];
+    // Composants (src/, components/) pour la bibliothèque, écrans du canevas dans canvas/.
+    if (pkg.dependencies?.['expo-router']) config.include = [...['src', 'components'].filter((d) => fs.existsSync(path.join(root, d))), 'canvas'];
     if (theme) config.theme = theme;
     fs.writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`);
     log(`${CONFIG_FILE} créé${theme ? ` (thème : ${theme.file})` : ''}.`);
@@ -319,9 +320,9 @@ module.exports = withRnCanvas(getDefaultConfig(__dirname));
   }
   const deps = { ...pkg.dependencies, ...pkg.devDependencies };
   const missing = ['react-dom', 'react-native-web', '@expo/metro-runtime'].filter((d) => !deps[d]);
-  if (missing.length) todo.push(`Installez le support web : npx expo install ${missing.join(' ')}`);
+  if (missing.length) todo.push(`Installez le support web : ${installCommand(root, missing)}`);
   // Un babel.config.js explicite doit pouvoir résoudre le preset Expo depuis la racine.
-  if (!deps['babel-preset-expo']) todo.push('Installez le preset Babel : npx expo install babel-preset-expo -- --save-dev');
+  if (!deps['babel-preset-expo']) todo.push(`Installez le preset Babel : ${installCommand(root, ['babel-preset-expo'], true)}`);
 
   // 5. Fournisseurs du layout racine, puis un écran par route d'expo-router (rien n'est écrasé)
   const project = new Project(root);

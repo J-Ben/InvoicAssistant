@@ -51,7 +51,7 @@ test('projet Expo à brancher : chaque problème avec sa correction', () => {
     },
   );
   const checks = diagnose(root);
-  assert.equal(find(checks, /Support web absent : @expo\/metro-runtime/)?.fix, 'npx expo install @expo/metro-runtime');
+  assert.equal(find(checks, /Support web absent : @expo\/metro-runtime/)?.fix, 'npm install @expo/metro-runtime@~58.0.15');
   assert.equal(find(checks, /ne charge pas le plugin/)?.level, 'error');
   assert.equal(find(checks, /Pas de metro.config.js/)?.level, 'warn');
   assert.equal(find(checks, /app\/_layout.tsx n'est pas branché/)?.level, 'error');
