@@ -23,12 +23,14 @@ interface Props {
   /** Où le composant sera inséré (affiché en info-bulle) ; null : rien de sélectionné ni d'écran actif. */
   target: string | null;
   onInsert: (component: ComponentEntry) => void;
+  /** « Ouvrir en grand » d'une modale : écran dédié dans le canevas. */
+  onOpenComponent: (component: ComponentEntry) => void;
   appUrl: string;
   isolateStories: boolean;
 }
 
 /** Barre flottante en bas du canevas : ajouter du texte, un bouton… ou un composant de la bibliothèque. */
-export function LibraryBar({ components, target, onInsert, appUrl, isolateStories }: Props) {
+export function LibraryBar({ components, target, onInsert, onOpenComponent, appUrl, isolateStories }: Props) {
   const [open, setOpen] = useState<string | null>(null);
   const [query, setQuery] = useState('');
   const [view, setView] = useLibraryView('rn-canvas:library-view:bar');
@@ -145,7 +147,20 @@ export function LibraryBar({ components, target, onInsert, appUrl, isolateStorie
           </>
         )}
         {/* Toujours monté une fois demandé : seul son affichage suit le menu et la vue choisie. */}
-        {galleryWanted && <GalleryFrame name="bar" appUrl={appUrl} isolateStories={isolateStories} components={items} onPick={insert} hidden={!showPreviews} />}
+        {galleryWanted && (
+          <GalleryFrame
+            name="bar"
+            appUrl={appUrl}
+            isolateStories={isolateStories}
+            components={items}
+            onPick={insert}
+            onOpen={(c) => {
+              setOpen(null);
+              onOpenComponent(c);
+            }}
+            hidden={!showPreviews}
+          />
+        )}
       </div>
     </div>
   );

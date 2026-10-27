@@ -125,7 +125,7 @@ Ouvrez **http://localhost:7007**.
   };
   ```
 
-  Chaque exemple donne une vignette ; ses props remplacent les valeurs génériques (« Label », 0…). Les modales et panneaux qui s'affichent par-dessus l'écran n'ont pas d'aperçu en vignette.
+  Chaque exemple donne une vignette ; ses props remplacent les valeurs génériques (« Label », 0…). Les modales et panneaux qui s'affichent par-dessus l'écran n'ont pas d'aperçu en vignette : leur bouton **Ouvrir en grand** crée l'écran `canvas/components/<Nom>.canvas.tsx` (s'il n'existe pas), qui affiche le composant ouvert, en taille réelle, avec son exemple (`example: '<Nom>'` dans le `default`, `example: 'variante'` dans une story pour en choisir une). Les panneaux pilotés par ref (`BottomSheetModal` de @gorhom…) sont ouverts automatiquement (`present()`).
 - **Clic droit** sur un élément (dans l'écran ou dans les calques) : Dupliquer, Copier le code JSX, Copier l'emplacement, Ouvrir dans VS Code, Sélectionner le parent, Supprimer.
 - **Dégradés** (`expo-linear-gradient`, `react-native-linear-gradient`) : la section « Fond dégradé » apparaît pour un `LinearGradient` ou pour un élément dont c'est le calque de fond (`absoluteFill`). Aperçu, couleurs réellement rendues (même calculées), modification de chaque couleur (valeur ou jeton du thème), ajout / retrait, direction.
 - **Version** : affichée à côté du nom du projet, pour vérifier quelle version de l'éditeur tourne.

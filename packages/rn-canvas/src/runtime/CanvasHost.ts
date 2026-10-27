@@ -11,6 +11,30 @@ interface ResolvedStory {
   storage: Record<string, string> | null;
 }
 
+/** Props de l'exemple `component` (variante `variant`, sinon la première) déclaré dans rn-canvas.config.tsx. */
+function exampleProps(manifest: CanvasManifest, component: string | undefined, variant: string | undefined): Record<string, unknown> {
+  if (!component) return {};
+  const declared = manifest.config?.examples?.[component];
+  const list = Array.isArray(declared) ? declared : declared ? [declared] : [];
+  const example = (variant && list.find((e) => e.name === variant)) || list[0];
+  return example?.props ?? {};
+}
+
+/**
+ * Rend le composant de l'écran. Les panneaux pilotés par ref (BottomSheetModal de @gorhom, ou un
+ * composant qui en expose un via forwardRef) restent fermés tant que personne n'appelle `present()` :
+ * on l'appelle au montage pour qu'ils s'affichent ouverts, comme les modales à prop `visible`.
+ */
+function Presented({ component, props }: { component: ComponentType<any>; props: Record<string, unknown> }) {
+  const ref = (instance: unknown) => {
+    const present = (instance as { present?: unknown } | null)?.present;
+    if (typeof present !== 'function') return;
+    const timer = setTimeout(() => present.call(instance), 0);
+    return () => clearTimeout(timer);
+  };
+  return h(component, { ...props, ref });
+}
+
 function resolveStory(storyId: string, manifest: CanvasManifest): ResolvedStory {
   const hash = storyId.lastIndexOf('#');
   const file = storyId.slice(0, hash);
@@ -30,11 +54,12 @@ function resolveStory(storyId: string, manifest: CanvasManifest): ResolvedStory 
   }
 
   const s = story as CanvasStoryObject;
-  const props = { ...meta.props, ...s.props };
+  // Ordre : props de l'écran (valeurs de repli), puis exemple déclaré, puis props de la variante.
+  const props = { ...meta.props, ...exampleProps(manifest, meta.example, s.example), ...s.props };
   const render = s.render
     ? () => s.render!(props)
     : meta.component
-      ? () => h(meta.component!, props)
+      ? () => h(Presented, { component: meta.component!, props })
       : () => {
           throw new Error(`« ${exportName} » n'a ni render ni component (export par défaut).`);
         };

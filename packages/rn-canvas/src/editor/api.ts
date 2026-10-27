@@ -24,6 +24,8 @@ export const api = {
     request<EditResult>('/api/edit', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }),
   history: () => request<HistoryState>('/api/history'),
   flows: () => request<FlowLink[]>('/api/flows'),
+  componentStory: (file: string, name: string) =>
+    request<{ story: string; file: string; created: boolean }>('/api/component-story', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ file, name }) }),
   undo: () => request<EditResult>('/api/undo', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' }),
   redo: () => request<EditResult>('/api/redo', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' }),
   events(onEvent: (type: string) => void): () => void {

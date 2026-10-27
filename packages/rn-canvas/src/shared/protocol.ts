@@ -78,7 +78,9 @@ export type RuntimeMessage =
   /** Cadre des aperçus de la bibliothèque prêt à recevoir sa liste (`gallery`). */
   | { source: 'rn-canvas'; type: 'gallery-ready'; story: string }
   /** Clic sur un aperçu : composant à insérer (`fichier#Nom`). */
-  | { source: 'rn-canvas'; type: 'pick'; story: string; key: string };
+  | { source: 'rn-canvas'; type: 'pick'; story: string; key: string }
+  /** « Ouvrir en grand » sur la vignette d'une modale : écran dédié dans le canevas. */
+  | { source: 'rn-canvas'; type: 'open'; story: string; key: string };
 
 /** Composant à prévisualiser dans le cadre des aperçus. */
 export interface GalleryItem {

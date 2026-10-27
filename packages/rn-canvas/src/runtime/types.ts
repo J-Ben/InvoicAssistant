@@ -25,6 +25,8 @@ export interface CanvasStoryObject<P = Record<string, unknown>> {
    * premier rendu. Écrit par l'éditeur : « Enregistrer cet état comme variante ».
    */
   storage?: Record<string, string>;
+  /** Variante des exemples du composant (`examples` de rn-canvas.config.tsx) à utiliser, par son nom. */
+  example?: string;
 }
 
 export type CanvasStory<P = Record<string, unknown>> = CanvasStoryObject<P> | ComponentType;
@@ -33,6 +35,11 @@ export type CanvasStory<P = Record<string, unknown>> = CanvasStoryObject<P> | Co
 export interface CanvasMeta<P = Record<string, unknown>> {
   title?: string;
   component?: ComponentType<P>;
+  /**
+   * Nom du composant dans `examples` (rn-canvas.config.tsx) : ses props d'exemple s'ajoutent à
+   * celles de l'écran. Utilisé par les écrans « Ouvrir en grand » des modales et panneaux.
+   */
+  example?: string;
   props?: Partial<P>;
   wrapper?: ComponentType<CanvasWrapperProps>;
   setup?: () => void | (() => void);

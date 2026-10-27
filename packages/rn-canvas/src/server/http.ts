@@ -61,6 +61,11 @@ export function startServer(project: Project, options: ServerOptions): Promise<C
         return send(res, 200, project.edit(body));
       }
 
+      if (url.pathname === '/api/component-story' && req.method === 'POST') {
+        if (!req.headers['content-type']?.startsWith('application/json')) throw new SourceError('Content-Type JSON attendu.', 415);
+        const body = (await readJson(req)) as { file: string; name: string };
+        return send(res, 200, project.createComponentStory(body.file, body.name));
+      }
       if (url.pathname === '/api/flows' && req.method === 'GET') return send(res, 200, project.flows());
       if (url.pathname === '/api/history' && req.method === 'GET') return send(res, 200, project.history());
       if (url.pathname === '/api/undo' && req.method === 'POST') return send(res, 200, project.undo());

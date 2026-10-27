@@ -15,7 +15,7 @@ const STORY = 'gallery';
 /** Composants qui s'affichent par-dessus l'écran (modale, plein écran) : pas d'aperçu dans une vignette. */
 const NO_PREVIEW = /(Modal|Sheet|Prompt|Overlay|Splash|Screen|Wizard|Provider|Bubble|Lock)$/;
 
-function post(message: { type: 'gallery-ready' } | { type: 'pick'; key: string }) {
+function post(message: { type: 'gallery-ready' } | { type: 'pick'; key: string } | { type: 'open'; key: string }) {
   window.parent?.postMessage({ source: 'rn-canvas', story: STORY, ...message }, '*');
 }
 
@@ -109,7 +109,19 @@ function Cell({ item, example, load }: { item: GalleryItem; example: ComponentEx
   const missing = item.props.filter((p) => p.type === 'unknown' && p.name !== 'children' && !(example?.props && p.name in example.props)).map((p) => p.name);
 
   let preview: ReactNode;
-  if (NO_PREVIEW.test(item.name)) preview = h(Placeholder, { text: "S'affiche par-dessus l'écran : pas d'aperçu en vignette." });
+  if (NO_PREVIEW.test(item.name)) {
+    // Modale, panneau… : affichée par-dessus tout l'écran, elle a besoin d'un écran à elle.
+    preview = h(
+      View,
+      { style: styles.placeholder },
+      h(Text, { style: styles.placeholderText }, "S'affiche par-dessus l'écran."),
+      h(
+        Pressable,
+        { onPress: () => post({ type: 'open', key: item.key }), style: styles.openButton, accessibilityRole: 'button' },
+        h(Text, { style: styles.openButtonText }, 'Ouvrir en grand'),
+      ),
+    );
+  }
   else if (!load) preview = h(Placeholder, { text: 'Relancez « npx rn-canvas generate » pour voir cet aperçu.' });
   else {
     preview = h(
@@ -182,4 +194,6 @@ const styles = StyleSheet.create({
   name: { paddingHorizontal: 10, paddingVertical: 6, fontSize: 12, fontWeight: '600', color: '#1d1d22' },
   placeholder: { minHeight: 56, alignItems: 'center', justifyContent: 'center', padding: 8 },
   placeholderText: { fontSize: 11, color: '#7a7a85', textAlign: 'center' },
+  openButton: { marginTop: 8, paddingHorizontal: 12, paddingVertical: 6, borderRadius: 8, backgroundColor: '#7c5cff' },
+  openButtonText: { color: '#ffffff', fontSize: 12, fontWeight: '600' },
 });

@@ -80,6 +80,8 @@ interface Props {
   frames: Map<string, HTMLIFrameElement>;
   onActivate: (id: string) => void;
   empty: boolean;
+  /** Écran à amener au centre de la vue (nouvel écran de composant) ; `seq` change à chaque demande. */
+  reveal?: { id: string; seq: number } | null;
   /** Barres flottantes (bibliothèque) posées sur le canevas. */
   children?: React.ReactNode;
 }
@@ -88,7 +90,7 @@ interface Props {
  * Canevas infini : déplacement (glisser le fond, molette), zoom (Ctrl/⌘ + molette, boutons).
  * Un écran se déplace en glissant son nom ; sa position est mémorisée (bouton ⊞ : grille d'origine).
  */
-export function Canvas({ appUrl, isolateStories, stories, allStories, device, activeStory, errors, loaded, generations, flows, frames, onActivate, empty, children }: Props) {
+export function Canvas({ appUrl, isolateStories, stories, allStories, device, activeStory, errors, loaded, generations, flows, frames, onActivate, empty, reveal, children }: Props) {
   const viewport = useRef<HTMLDivElement>(null);
   // Vue mémorisée : ni un rechargement ni l'ajout / le masquage d'un écran ne la réinitialisent.
   const [view, setView] = useState<View>(() => readView() ?? { x: PADDING, y: PADDING, zoom: 0.75 });
@@ -208,6 +210,19 @@ export function Canvas({ appUrl, isolateStories, stories, allStories, device, ac
     }, 300);
     return () => window.clearTimeout(timer);
   }, [view]);
+
+  // Dès que l'écran demandé est dans la grille (manifeste rechargé), la vue le cadre.
+  const revealed = useRef(0);
+  useEffect(() => {
+    const el = viewport.current;
+    if (!reveal || reveal.seq === revealed.current || !el) return;
+    const p = positionOf(reveal.id);
+    if (!p) return;
+    revealed.current = reveal.seq;
+    const { width, height } = el.getBoundingClientRect();
+    const zoom = Math.min(1, (height - PADDING) / (device.height + LABEL));
+    setView({ zoom, x: width / 2 - (p.x + device.width / 2) * zoom, y: PADDING / 2 - p.y * zoom });
+  }, [reveal, positionOf, device]);
 
   const zoomAt = useCallback((factor: number, cx: number, cy: number) => {
     setView((v) => {

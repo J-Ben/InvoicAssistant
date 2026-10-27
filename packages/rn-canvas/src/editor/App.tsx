@@ -395,6 +395,21 @@ export function App() {
       ? { loc: rootLayer.loc, name: rootLayer.name, position: 'inside' as InsertPosition }
       : null;
   const insertTargetLabel = insertTarget && `${insertTarget.position === 'inside' ? 'dans' : 'après'} <${insertTarget.name}>`;
+  // « Ouvrir en grand » : écran du composant créé (ou retrouvé), puis la vue s'y déplace.
+  const [reveal, setReveal] = useState<{ id: string; seq: number } | null>(null);
+  const openComponentScreen = async (c: ComponentEntry) => {
+    if (!c.file) return;
+    try {
+      const result = await api.componentStory(c.file, c.name);
+      setToast({ kind: 'ok', text: result.created ? `Écran créé : ${result.file}` : `Écran de ${c.name}` });
+      loadProject();
+      setActiveStory(result.story);
+      setReveal((r) => ({ id: result.story, seq: (r?.seq ?? 0) + 1 }));
+    } catch (e) {
+      showError((e as Error).message);
+    }
+  };
+
   const insertComponent = (c: ComponentEntry) => {
     if (!insertTarget) return;
     edit({ op: 'insert', loc: insertTarget.loc, name: insertTarget.name, position: insertTarget.position, component: { name: c.name, file: c.file } });
@@ -494,6 +509,7 @@ export function App() {
       </header>
 
       <Sidebar
+        onOpenComponent={openComponentScreen}
         onLayerContextMenu={(loc, x, y) => {
           if (!activeStory) return;
           selectLoc(activeStory, loc);
@@ -548,11 +564,12 @@ export function App() {
           loaded={loaded}
           generations={generations}
           flows={showFlows ? { links: flows, rects: flowRects } : null}
+          reveal={reveal}
           frames={frames.current}
           onActivate={setActiveStory}
           empty={stories.length === 0}
         >
-          <LibraryBar components={project.components} target={insertTargetLabel} onInsert={insertComponent} appUrl={project.appUrl} isolateStories={project.isolateStories} />
+          <LibraryBar components={project.components} target={insertTargetLabel} onInsert={insertComponent} onOpenComponent={openComponentScreen} appUrl={project.appUrl} isolateStories={project.isolateStories} />
         </Canvas>
       )}
 

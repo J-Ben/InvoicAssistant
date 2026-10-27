@@ -444,6 +444,64 @@ export default manifest;
   }
 
   /** Spécificateur d'import d'un composant depuis `file` (chemin relatif, sans extension). */
+  // ---- Écrans de composants (« Ouvrir en grand ») ----
+
+  /**
+   * Écran du canevas qui affiche un composant seul, en taille réelle : pour les modales et panneaux,
+   * qui s'affichent par-dessus l'écran et n'ont donc pas d'aperçu en vignette. Ses props viennent des
+   * `examples` de rn-canvas.config.tsx (`example: 'Nom'`) ; le fichier généré ouvre la modale
+   * (`visible: true`…) et neutralise ses rappels. Rien n'est écrasé si le fichier existe déjà.
+   */
+  createComponentStory(file: string, name: string): { story: string; file: string; created: boolean } {
+    const entry = this.components().find((c) => c.file === file && c.name === name);
+    if (!entry) throw new SourceError(`Composant « ${name} » introuvable dans ${file}.`, 404);
+    const dir = this.config.include.includes('canvas') ? 'canvas/components' : `${this.config.include[0] ?? 'src'}/canvas`;
+    const target = `${dir}/${name}.canvas.tsx`;
+    const abs = this.resolve(target);
+    const story = `${target}#Exemple`;
+    if (fs.existsSync(abs)) {
+      const existing = this.stories().find((g) => g.file === target)?.stories[0]?.id;
+      return { story: existing ?? story, file: target, created: false };
+    }
+
+    // Repli quand l'exemple ne les fournit pas : modale ouverte, rappels sans effet.
+    const fallback = entry.props
+      .map((p) => {
+        if (p.type === 'boolean' && /^(visible|open|isOpen|isVisible|show|opened)$/.test(p.name)) return `${p.name}: true`;
+        if (p.type === 'function') return `${p.name}: () => {}`;
+        return null;
+      })
+      .filter(Boolean);
+    const others = entry.props.filter((p) => p.type !== 'function' && !(p.type === 'boolean' && /^(visible|open|isOpen|isVisible|show|opened)$/.test(p.name)) && p.name !== 'children');
+    const code = `import type { CanvasMeta, CanvasStory } from 'rn-canvas/runtime';
+import { ${name} } from ${JSON.stringify(this.moduleSpecifier(target, entry.file!))};
+
+// ${name} affiché seul, en taille réelle. Ses données viennent de \`examples.${name}\` dans
+// rn-canvas.config.tsx${others.length ? ` (props attendues : ${others.map((p) => p.name).join(', ')})` : ''}.
+export default {
+  title: ${JSON.stringify(name)},
+  component: ${name},
+  example: ${JSON.stringify(name)},
+  props: { ${fallback.join(', ')} },
+} satisfies CanvasMeta;
+
+export const Exemple: CanvasStory = {};
+`;
+    fs.mkdirSync(path.dirname(abs), { recursive: true });
+    fs.writeFileSync(abs, code);
+    this.writeManifest();
+    return { story, file: target, created: true };
+  }
+
+  /** Chemin d'import de `target` depuis `fromFile` : alias du tsconfig s'il y en a un, sinon relatif. */
+  private moduleSpecifier(fromFile: string, target: string): string {
+    const bare = target.replace(/\.(tsx|jsx|ts|js)$/, '').replace(/\/index$/, '');
+    for (const { alias, dir } of this.pathAliases()) if (bare.startsWith(`${dir}/`)) return `${alias}/${bare.slice(dir.length + 1)}`;
+    let rel = path.posix.relative(path.posix.dirname(fromFile), bare);
+    if (!rel.startsWith('.')) rel = `./${rel}`;
+    return rel;
+  }
+
   private importPath(file: string, entry: ComponentEntry, src?: SourceFile): string {
     if (!entry.file) return 'react-native';
     if (entry.file === file) return '';

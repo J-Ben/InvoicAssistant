@@ -257,3 +257,24 @@ test("addStory : nouvelle variante à partir d'une existante, avec le stockage c
   project.undo();
   assert.ok(!fs.readFileSync(path.join(root, file), 'utf8').includes('AvecDonnees'));
 });
+
+test('écran de composant : modale ouverte, rappels neutres, exemple du composant, pas d\'écrasement', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'rnc-modal-'));
+  fs.mkdirSync(path.join(root, 'src/components'), { recursive: true });
+  fs.writeFileSync(path.join(root, 'rn-canvas.json'), JSON.stringify({ include: ['src', 'canvas'] }));
+  fs.writeFileSync(
+    path.join(root, 'src/components/PriceModal.tsx'),
+    `interface PriceModalProps { visible: boolean; label: string; item: Item; onClose: () => void }\nexport function PriceModal(props: PriceModalProps) { return null; }\n`,
+  );
+  const project = new Project(root);
+  const first = project.createComponentStory('src/components/PriceModal.tsx', 'PriceModal');
+  assert.deepEqual(first, { story: 'canvas/components/PriceModal.canvas.tsx#Exemple', file: 'canvas/components/PriceModal.canvas.tsx', created: true });
+  const code = fs.readFileSync(path.join(root, first.file), 'utf8');
+  assert.ok(code.includes(`import { PriceModal } from "../../src/components/PriceModal";`));
+  assert.ok(code.includes(`example: "PriceModal"`));
+  assert.ok(code.includes('props: { visible: true, onClose: () => {} }'));
+  assert.ok(code.includes('props attendues : label, item'));
+  assert.ok(fs.readFileSync(path.join(root, 'rn-canvas.stories.ts'), 'utf8').includes('PriceModal.canvas.tsx'));
+  assert.equal(project.createComponentStory('src/components/PriceModal.tsx', 'PriceModal').created, false);
+  assert.throws(() => project.createComponentStory('src/components/PriceModal.tsx', 'Nope'), /introuvable/);
+});

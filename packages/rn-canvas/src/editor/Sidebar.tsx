@@ -17,6 +17,8 @@ interface Props {
   onHoverLayer: (loc: string | null) => void;
   selection: Selection | null;
   onEdit: (request: EditRequest) => void;
+  /** « Ouvrir en grand » d'une modale (aperçus des composants) : écran dédié dans le canevas. */
+  onOpenComponent: (component: ComponentEntry) => void;
   /** Clic droit sur un calque (le sélectionne et ouvre le menu). */
   onLayerContextMenu: (loc: string, x: number, y: number) => void;
   /** Capture le stockage de l'écran et l'enregistre comme nouvelle variante. */
@@ -230,7 +232,7 @@ function Layer({ node, depth, selectedLoc, onSelect, onHover, onDrop }: LayerPro
   );
 }
 
-function Components({ project, selection, onEdit }: Props) {
+function Components({ project, selection, onEdit, onOpenComponent }: Props) {
   const [query, setQuery] = useState('');
   const [view, setView] = useLibraryView('rn-canvas:library-view:panel');
   // Le cadre des aperçus, une fois chargé, reste monté même en vue Liste (son chargement est long).
@@ -272,7 +274,7 @@ function Components({ project, selection, onEdit }: Props) {
             : "Sélectionnez d'abord un élément, puis cliquez sur un aperçu pour l'insérer."}
       </p>
       {galleryWanted && (
-        <GalleryFrame name="panel" className="panel-gallery" appUrl={project.appUrl} isolateStories={project.isolateStories} components={previewed} onPick={insert} hidden={view !== 'previews'} />
+        <GalleryFrame name="panel" className="panel-gallery" appUrl={project.appUrl} isolateStories={project.isolateStories} components={previewed} onPick={insert} onOpen={onOpenComponent} hidden={view !== 'previews'} />
       )}
       {view === 'list' && [...groups].map(([group, items]) => (
         <div key={group} className="group">

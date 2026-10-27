@@ -58,6 +58,8 @@ interface Props {
   /** Composants à afficher, dans l'ordre. */
   components: ComponentEntry[];
   onPick: (component: ComponentEntry) => void;
+  /** « Ouvrir en grand » (modales, panneaux) : écran dédié dans le canevas. */
+  onOpen?: (component: ComponentEntry) => void;
   hidden?: boolean;
   className?: string;
 }
@@ -66,11 +68,13 @@ interface Props {
  * Aperçus réels des composants (rendus par l'app, avec ses fournisseurs et des valeurs d'exemple).
  * Le cadre reste chargé une fois affiché : seule la liste envoyée change.
  */
-export function GalleryFrame({ name, appUrl, isolateStories, components, onPick, hidden, className }: Props) {
+export function GalleryFrame({ name, appUrl, isolateStories, components, onPick, onOpen, hidden, className }: Props) {
   const frame = useRef<HTMLIFrameElement>(null);
   const [ready, setReady] = useState(false);
   const pick = useRef(onPick);
   pick.current = onPick;
+  const open = useRef(onOpen);
+  open.current = onOpen;
   const list = useRef(components);
   list.current = components;
 
@@ -78,10 +82,10 @@ export function GalleryFrame({ name, appUrl, isolateStories, components, onPick,
     const onMessage = (event: MessageEvent<RuntimeMessage>) => {
       if (event.source !== frame.current?.contentWindow || event.data?.source !== 'rn-canvas') return;
       if (event.data.type === 'gallery-ready') setReady(true);
-      if (event.data.type === 'pick') {
-        const key = event.data.key;
+      if (event.data.type === 'pick' || event.data.type === 'open') {
+        const { type, key } = event.data;
         const c = list.current.find((x) => componentKey(x) === key);
-        if (c) pick.current(c);
+        if (c) (type === 'open' ? open.current : pick.current)?.(c);
       }
     };
     window.addEventListener('message', onMessage);
