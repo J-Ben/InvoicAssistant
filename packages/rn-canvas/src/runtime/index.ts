@@ -11,7 +11,7 @@ import { CanvasHost } from './CanvasHost';
 import { GalleryHost } from './gallery';
 import type { CanvasManifest } from './types';
 
-export type { CanvasManifest, CanvasMeta, CanvasRuntimeConfig, CanvasStory, CanvasStoryObject, CanvasWrapperProps } from './types';
+export type { CanvasManifest, CanvasMeta, CanvasRuntimeConfig, CanvasStory, CanvasStoryObject, CanvasWrapperProps, ComponentExample } from './types';
 
 export { CanvasSeed } from './seed';
 

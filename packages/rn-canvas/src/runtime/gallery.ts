@@ -8,7 +8,7 @@ import { Component, type ReactNode, Suspense, createElement as h, useEffect, use
 import { LogBox, Pressable, type PressableProps, ScrollView, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
 import type { EditorMessage, GalleryItem } from '../shared/protocol';
 import { neutralizeRouter } from './CanvasHost';
-import type { CanvasManifest } from './types';
+import type { CanvasManifest, ComponentExample } from './types';
 
 const STORY = 'gallery';
 
@@ -64,13 +64,22 @@ export function GalleryHost({ loadManifest }: { loadManifest: () => CanvasManife
   });
   // La grille (et sa liste) vit sous les fournisseurs de l'app : certains, mémorisés (SQLiteProvider
   // d'expo-sqlite), ignorent un changement d'enfants venu d'au-dessus, et la liste ne changerait plus.
-  const [grid] = useState(() => h(Grid, { components: manifest?.components }));
+  const [grid] = useState(() => h(Grid, { components: manifest?.components, examples: manifest?.config?.examples }));
   const Wrapper = manifest?.config?.wrapper;
   return h(View, { style: styles.root }, Wrapper ? h(Wrapper, { story: { id: STORY, parameters: {} }, children: grid }) : grid);
 }
 
+type Examples = Record<string, ComponentExample | ComponentExample[]>;
+
+/** Exemples déclarés pour un composant (par nom, ou par `fichier#Nom`), ou un seul sans données. */
+function examplesOf(item: GalleryItem, examples?: Examples): (ComponentExample | null)[] {
+  const declared = examples?.[item.key] ?? examples?.[item.name];
+  if (!declared) return [null];
+  return Array.isArray(declared) ? declared : [declared];
+}
+
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-function Grid({ components }: { components?: Record<string, () => any> }) {
+function Grid({ components, examples }: { components?: Record<string, () => any>; examples?: Examples }) {
   const [items, setItems] = useState<GalleryItem[]>([]);
 
   // Prête une fois montée sous les fournisseurs (polices, base…) : l'éditeur envoie alors la liste.
@@ -86,17 +95,18 @@ function Grid({ components }: { components?: Record<string, () => any> }) {
   return h(
     ScrollView,
     { contentContainerStyle: styles.grid },
-    items.map((item) => h(Cell, { key: item.key, item, load: components?.[item.key] })),
+    items.flatMap((item) => examplesOf(item, examples).map((example, i) => h(Cell, { key: `${item.key}:${i}`, item, example, load: components?.[item.key] }))),
   );
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-function Cell({ item, load }: { item: GalleryItem; load?: () => any }) {
+function Cell({ item, example, load }: { item: GalleryItem; example: ComponentExample | null; load?: () => any }) {
   const [empty, setEmpty] = useState(false);
   // Deux colonnes dans le menu de la barre, une seule dans le panneau latéral (étroit).
   const { width } = useWindowDimensions();
   const cellWidth = Math.min(280, width - 24);
-  const missing = item.props.filter((p) => p.type === 'unknown' && p.name !== 'children').map((p) => p.name);
+  // Données encore manquantes : props obligatoires sans valeur d'exemple générique ni fournie.
+  const missing = item.props.filter((p) => p.type === 'unknown' && p.name !== 'children' && !(example?.props && p.name in example.props)).map((p) => p.name);
 
   let preview: ReactNode;
   if (NO_PREVIEW.test(item.name)) preview = h(Placeholder, { text: "S'affiche par-dessus l'écran : pas d'aperçu en vignette." });
@@ -110,7 +120,7 @@ function Cell({ item, load }: { item: GalleryItem; load?: () => any }) {
       h(
         Suspense,
         { fallback: h(Placeholder, { text: 'Chargement…' }) },
-        h(View, { pointerEvents: 'none', onLayout: (e: { nativeEvent: { layout: { height: number } } }) => setEmpty(e.nativeEvent.layout.height < 2) }, h(Render, { load, item })),
+        h(View, { pointerEvents: 'none', onLayout: (e: { nativeEvent: { layout: { height: number } } }) => setEmpty(e.nativeEvent.layout.height < 2) }, h(Render, { load, item, example })),
       ),
       empty ? h(Placeholder, { text: missing.length ? `Rien d'affiché sans données : ${missing.join(', ')}.` : "Rien d'affiché avec les valeurs d'exemple." }) : null,
     );
@@ -124,17 +134,19 @@ function Cell({ item, load }: { item: GalleryItem; load?: () => any }) {
       style: (({ hovered }: { hovered?: boolean }) => [styles.cell, { width: cellWidth }, hovered && styles.cellHovered]) as unknown as PressableProps['style'],
     },
     h(View, { style: styles.preview }, preview),
-    h(Text, { style: styles.name, numberOfLines: 1 }, item.name),
+    h(Text, { style: styles.name, numberOfLines: 1 }, example?.name ? `${item.name} · ${example.name}` : item.name),
   );
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-function Render({ load, item }: { load: () => any; item: GalleryItem }) {
+function Render({ load, item, example }: { load: () => any; item: GalleryItem; example: ComponentExample | null }) {
   const Comp = load();
   if (!Comp) throw new Error(`« ${item.name} » introuvable`);
-  const props = sampleProps(item);
+  // Exemple déclaré par-dessus les valeurs génériques (« Label », 0, () => {}…).
+  const props = { ...sampleProps(item), ...example?.props };
   const textLike = /(Text|Typography|Title|Heading)$/.test(item.name);
-  return h(Comp, props, textLike ? 'Nouveau texte' : undefined);
+  const children = example?.children ?? (textLike ? 'Nouveau texte' : undefined);
+  return h(Comp, props, children);
 }
 
 class CellBoundary extends Component<{ missing: string[]; children?: ReactNode }, { failed: boolean }> {
@@ -147,7 +159,11 @@ class CellBoundary extends Component<{ missing: string[]; children?: ReactNode }
   render() {
     if (!this.state.failed) return this.props.children;
     const { missing } = this.props;
-    return h(Placeholder, { text: missing.length ? `Aperçu impossible sans données : ${missing.join(', ')}.` : 'Aperçu impossible avec les valeurs d’exemple.' });
+    return h(Placeholder, {
+      text: missing.length
+        ? `Aperçu impossible sans données : ${missing.join(', ')}. Ajoutez un exemple dans rn-canvas.config.tsx (examples).`
+        : 'Aperçu impossible avec les valeurs d’exemple.',
+    });
   }
 }
 

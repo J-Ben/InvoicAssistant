@@ -39,10 +39,23 @@ export interface CanvasMeta<P = Record<string, unknown>> {
   parameters?: Record<string, unknown>;
 }
 
+/** Exemple d'un composant de la bibliothèque : ses props (et enfants) pour l'aperçu. */
+export interface ComponentExample {
+  /** Nom de la variante, affiché sous la vignette (« Payée », « En retard »…). */
+  name?: string;
+  props?: Record<string, unknown>;
+  children?: ReactNode;
+}
+
 /** Export par défaut de `rn-canvas.config.tsx` (optionnel). */
 export interface CanvasRuntimeConfig {
   /** Fournisseurs communs à tous les écrans (navigation, thème, stores…). */
   wrapper?: ComponentType<CanvasWrapperProps>;
+  /**
+   * Données d'exemple des composants, par nom (`InvoiceCard`) : leurs aperçus dans l'éditeur les
+   * utilisent au lieu de valeurs génériques. Un tableau donne une vignette par variante.
+   */
+  examples?: Record<string, ComponentExample | ComponentExample[]>;
 }
 
 /** Fichier généré par `rn-canvas generate`. */

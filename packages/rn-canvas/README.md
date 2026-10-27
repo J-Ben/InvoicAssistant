@@ -110,6 +110,22 @@ Ouvrez **http://localhost:7007**.
 - **Thème de l'éditeur** : le bouton Système / Clair / Sombre de la barre du haut. Le choix est mémorisé dans le navigateur.
 - **Flux** (projets expo-router) : le bouton ⇢ Flux dessine les liens de navigation lus dans le code (`router.push/replace/navigate`, `<Link href>`), du bouton exact vers l'écran visé. Survolez un écran pour mettre ses liens en avant. La légende compte les liens vers des écrans absents du canevas et les boutons non affichés dans l'état actuel (liste vide…). Une cible calculée (`router.push(route)`) n'est pas lisible dans le code et n'apparaît pas.
 - **Barre de la bibliothèque** (en bas du canevas) : Texte, Bouton, Champ et Conteneur (composants du projet comme `AppText`, `Button`, `Input` s'ils existent, sinon les primitives React Native), puis les atomes, molécules, organismes et autres composants du projet, avec recherche. Un clic insère dans l'élément sélectionné (conteneur) ou juste après, sinon dans l'écran actif ; on peut aussi glisser sur un écran.
+- **Aperçus des composants** : l'onglet Composants et les menus de la barre montrent le rendu réel de chaque composant (bascule Aperçus / Liste). Pour ceux qui exigent des données (une facture, une ligne de budget…), déclarez des exemples dans `rn-canvas.config.tsx` :
+
+  ```tsx
+  const config: CanvasRuntimeConfig = {
+    wrapper: Providers,
+    examples: {
+      InvoiceCard: [
+        { name: 'Payée', props: { invoice: fixtures.invoices[0], onPress: () => {} } },
+        { name: 'En attente', props: { invoice: fixtures.invoices[1], onPress: () => {} } },
+      ],
+      ProgressBar: { props: { progress: 0.6 } },
+    },
+  };
+  ```
+
+  Chaque exemple donne une vignette ; ses props remplacent les valeurs génériques (« Label », 0…). Les modales et panneaux qui s'affichent par-dessus l'écran n'ont pas d'aperçu en vignette.
 - **Clic droit** sur un élément (dans l'écran ou dans les calques) : Dupliquer, Copier le code JSX, Copier l'emplacement, Ouvrir dans VS Code, Sélectionner le parent, Supprimer.
 - **Dégradés** (`expo-linear-gradient`, `react-native-linear-gradient`) : la section « Fond dégradé » apparaît pour un `LinearGradient` ou pour un élément dont c'est le calque de fond (`absoluteFill`). Aperçu, couleurs réellement rendues (même calculées), modification de chaque couleur (valeur ou jeton du thème), ajout / retrait, direction.
 - **Version** : affichée à côté du nom du projet, pour vérifier quelle version de l'éditeur tourne.
