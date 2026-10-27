@@ -558,6 +558,17 @@ export function App() {
     return () => window.clearTimeout(t);
   }, [toast]);
 
+  // Palette contextuelle à côté de l'écran de la sélection (mode Sélection).
+  const paletteVisible = Boolean(
+    mode === 'inspect' &&
+      tab.state === 'owner' &&
+      selection?.inspect &&
+      selectionRect?.rect &&
+      selectionRect.story === selection.story &&
+      selectionRect.loc === selection.info.loc &&
+      frames.current.get(selection.story),
+  );
+
   if (loadError) {
     return (
       <div className="empty-state">
@@ -667,6 +678,7 @@ export function App() {
         <main className="canvas" />
       ) : (
         <Canvas
+          isolate={paletteVisible ? selection!.story : null}
           page={page}
           onChangePage={(update) => boardState.updatePage(page.id, update)}
           onCreateParcours={(name, ids) => {
@@ -712,14 +724,7 @@ export function App() {
         onTarget={(t) => selection?.inspect && setTargets((all) => ({ ...all, [selection.inspect!.loc]: t }))}
       />
 
-      {mode === 'inspect' &&
-        !menu &&
-        tab.state === 'owner' &&
-        selection?.inspect &&
-        selectionRect?.rect &&
-        selectionRect.story === selection.story &&
-        selectionRect.loc === selection.info.loc &&
-        frames.current.get(selection.story) && (
+      {paletteVisible && selection?.inspect && selectionRect?.rect && (
           <SelectionToolbar
             selection={selection}
             rect={selectionRect.rect}

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import type { BoardGroup, BoardNote, BoardPage, StoryEntry } from '../shared/protocol.ts';
 import { type FlowData, FlowLayer, FlowLegend, type FlowMode, layoutFlows, viewFlows } from './Flows.tsx';
 import { storyUrl } from './urls.ts';
+import { PALETTE_GAP, PALETTE_WIDTH, paletteSide } from './palette.ts';
 
 /** `shown` : l'écran a affiché quelque chose ; `empty` : prêt mais toujours vide après un long délai. */
 export type LoadState = 'shown' | 'empty';
@@ -109,6 +110,8 @@ interface Props {
   onCreateParcours: (name: string, stories: string[]) => void;
   flowMode: FlowMode;
   onFlowMode: (mode: FlowMode) => void;
+  /** Écran dont la palette contextuelle est ouverte : ses voisins s'écartent pour lui faire place. */
+  isolate?: string | null;
   /** Barres flottantes (bibliothèque) posées sur le canevas. */
   children?: React.ReactNode;
 }
@@ -119,7 +122,7 @@ interface Props {
  */
 export function Canvas(props: Props) {
   const { appUrl, isolateStories, stories, allStories, device, activeStory, errors, loaded, generations, flows, frames, onActivate, empty, reveal, children } = props;
-  const { page, onChangePage, onCreateParcours, flowMode, onFlowMode } = props;
+  const { page, onChangePage, onCreateParcours, flowMode, onFlowMode, isolate } = props;
   const viewport = useRef<HTMLDivElement>(null);
   // Vue mémorisée par page : ni un rechargement ni l'ajout / le masquage d'un écran ne la réinitialisent.
   const [view, setView] = useState<View>(() => readView(page.id) ?? { x: PADDING, y: PADDING, zoom: 0.75 });
@@ -164,6 +167,37 @@ export function Canvas(props: Props) {
     const y = Math.min(...boxes.map((b) => b.y));
     return { x, y, width: Math.max(...boxes.map((b) => b.x + b.width)) - x, height: Math.max(...boxes.map((b) => b.y + b.height)) - y };
   }, [stories, positionOf, device, page.groups, page.notes]);
+
+  // Palette ouverte à côté d'un écran : les écrans de sa rangée, du côté de la palette, glissent
+  // juste assez pour la laisser à découvert. Décalage visuel seulement (positions inchangées).
+  const shifts = useMemo(() => {
+    const el = viewport.current;
+    const p = isolate ? positionOf(isolate) : null;
+    if (!el || !p) return {} as Record<string, number>;
+    const left = p.x * view.zoom + view.x;
+    const right = (p.x + device.width) * view.zoom + view.x;
+    const side = paletteSide(left, right, 0, el.clientWidth);
+    const room = (PALETTE_GAP * 2 + PALETTE_WIDTH) / view.zoom;
+    const top = p.y;
+    const bottom = p.y + device.height + LABEL;
+    const row = stories
+      .filter((s) => s.id !== isolate)
+      .map((s) => ({ id: s.id, q: positionOf(s.id) }))
+      .filter((s): s is { id: string; q: Point } => s.q !== null && s.q.y < bottom && s.q.y + device.height + LABEL > top);
+    const out: Record<string, number> = {};
+    if (side === 'right') {
+      const next = row.filter((s) => s.q.x >= p.x + device.width / 2);
+      const gap = Math.min(...next.map((s) => s.q.x - (p.x + device.width)));
+      const shift = room - gap;
+      if (shift > 0) for (const s of next) out[s.id] = shift;
+    } else {
+      const previous = row.filter((s) => s.q.x + device.width <= p.x + device.width / 2);
+      const gap = Math.min(...previous.map((s) => p.x - (s.q.x + device.width)));
+      const shift = room - gap;
+      if (shift > 0) for (const s of previous) out[s.id] = -shift;
+    }
+    return out;
+  }, [isolate, positionOf, stories, view, device]);
 
   // Groupe d'un écran : le plus petit cadre qui contient son centre.
   const groupOfPoint = useCallback(
@@ -464,7 +498,7 @@ export const Default = { props: {} };`}</pre>
             <section
               key={story.id}
               className={`artboard ${activeStory === story.id ? 'active' : ''} ${movingId === story.id ? 'moving' : ''}`}
-              style={p === null ? { display: 'none', width: device.width } : { left: p.x, top: p.y, width: device.width }}
+              style={p === null ? { display: 'none', width: device.width } : { left: p.x, top: p.y, width: device.width, transform: shifts[story.id] ? `translateX(${shifts[story.id]}px)` : undefined }}
               onMouseEnter={() => setHovered(story.id)}
               onMouseLeave={() => setHovered((h) => (h === story.id ? null : h))}
             >

@@ -138,7 +138,8 @@ textarea { resize: vertical; }
 .canvas.panning { cursor: grabbing; }
 .canvas.panning iframe { pointer-events: none; }
 .world { position: absolute; left: 0; top: 0; transform-origin: 0 0; }
-.artboard { position: absolute; top: 0; }
+.artboard { position: absolute; top: 0; transition: transform 0.28s cubic-bezier(0.2, 0.8, 0.2, 1); }
+.artboard.moving { transition: none; }
 .artboard-label { display: block; cursor: grab; touch-action: none; user-select: none; border: 0; background: none; padding: 0 0 8px; height: 28px; color: var(--muted); font-size: 13px; white-space: nowrap; }
 .artboard.active .artboard-label { color: var(--accent); font-weight: 600; }
 .frame { position: relative; background: #fff; border-radius: 18px; overflow: hidden; box-shadow: 0 2px 4px rgb(0 0 0 / 0.06), 0 12px 32px rgb(0 0 0 / 0.1); outline: 2px solid transparent; }
@@ -340,21 +341,32 @@ textarea { resize: vertical; }
 .flow-legend { z-index: 5; cursor: default; bottom: 70px; }
 .primary-button.small { display: block; margin-top: 8px; padding: 5px 12px; font-size: 12px; }
 
-/* Barre flottante sur la sélection */
-.sel-toolbar { position: fixed; z-index: 20; display: flex; align-items: center; gap: 2px; padding: 3px; border-radius: 10px; background: var(--panel); border: 1px solid var(--border); box-shadow: 0 6px 20px rgb(0 0 0 / 0.18); font-size: 12px; white-space: nowrap; }
-.sel-group { display: inline-flex; align-items: center; gap: 2px; padding-left: 4px; margin-left: 2px; border-left: 1px solid var(--border); }
-.sel-btn { display: inline-flex; align-items: center; gap: 4px; min-width: 26px; height: 26px; padding: 0 6px; border: 0; border-radius: 6px; background: none; color: var(--text); cursor: pointer; font-size: 12px; }
+/* Palette contextuelle de la sélection, à côté de l'écran */
+.sel-palette { position: fixed; z-index: 20; display: flex; flex-direction: column; gap: 2px; padding: 10px; border-radius: 12px; background: var(--panel); border: 1px solid var(--border); box-shadow: 0 10px 30px rgb(0 0 0 / 0.16); font-size: 12px; box-sizing: border-box; animation: sel-in 0.18s ease-out; }
+.sel-palette.left { animation-name: sel-in-left; }
+@keyframes sel-in { from { opacity: 0; transform: translateX(-8px); } }
+@keyframes sel-in-left { from { opacity: 0; transform: translateX(8px); } }
+.sel-head { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; padding-bottom: 6px; margin-bottom: 2px; border-bottom: 1px solid var(--border); }
+.sel-head strong { font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
+.sel-section { margin-top: 6px; color: var(--muted); font-size: 10.5px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; }
+.sel-row { display: flex; align-items: center; justify-content: space-between; gap: 6px; min-height: 30px; }
+.sel-name { color: var(--muted); flex: none; }
+.sel-inline { display: inline-flex; align-items: center; gap: 2px; }
+.sel-btn { display: inline-flex; align-items: center; gap: 6px; min-width: 26px; height: 26px; padding: 0 6px; border: 0; border-radius: 6px; background: none; color: var(--text); cursor: pointer; font-size: 12px; }
 .sel-btn:hover { background: var(--input); }
 .sel-btn.on { background: var(--accent-soft); color: var(--accent); }
 .sel-icon { font-weight: 700; color: var(--muted); }
-.sel-swatch { width: 16px; height: 16px; border-radius: 4px; border: 1px solid var(--border); background-image: linear-gradient(45deg, #ddd 25%, transparent 25%, transparent 75%, #ddd 75%), linear-gradient(45deg, #ddd 25%, transparent 25%, transparent 75%, #ddd 75%); background-size: 8px 8px; background-position: 0 0, 4px 4px; }
+.sel-value { max-width: 110px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: ui-monospace, Menlo, monospace; font-size: 11px; color: var(--muted); }
+.sel-swatch { flex: none; width: 18px; height: 18px; border-radius: 5px; border: 1px solid var(--border); background-image: linear-gradient(45deg, #ddd 25%, transparent 25%, transparent 75%, #ddd 75%), linear-gradient(45deg, #ddd 25%, transparent 25%, transparent 75%, #ddd 75%); background-size: 8px 8px; background-position: 0 0, 4px 4px; }
 .sel-swatch[style*='background: rgb'], .sel-swatch[style*='background: #'] { background-image: none; }
-.sel-label { color: var(--muted); padding: 0 2px 0 6px; font-size: 15px; line-height: 1; }
-.sel-number { display: inline-flex; align-items: center; gap: 1px; }
-.sel-toolbar .sel-number input { flex: none; width: 38px; height: 24px; padding: 0 4px; border: 1px solid var(--border); border-radius: 5px; background: var(--input); color: var(--text); font-size: 12px; text-align: right; }
-.sel-warn { margin-left: 4px; padding: 2px 6px; border-radius: 999px; background: var(--warn-soft); color: var(--warn); font-size: 11px; font-weight: 600; }
+.sel-number { display: inline-flex; align-items: center; gap: 2px; }
+.sel-palette .sel-number input { flex: none; width: 46px; height: 26px; padding: 0 6px; border: 1px solid var(--border); border-radius: 6px; background: var(--input); color: var(--text); font-size: 12px; text-align: right; }
+.sel-warn { padding: 2px 6px; border-radius: 999px; background: var(--warn-soft); color: var(--warn); font-size: 10.5px; font-weight: 600; }
+.sel-tip { margin: 4px 0 0; line-height: 1.4; }
+.sel-more { margin-top: 6px; padding: 6px; border: 1px solid var(--border); border-radius: 7px; background: none; color: var(--accent); cursor: pointer; font-size: 12px; }
+.sel-more:hover { background: var(--accent-soft); }
 .sel-color { position: relative; display: inline-flex; }
-.sel-popover { position: absolute; top: calc(100% + 6px); left: 0; z-index: 21; width: 236px; padding: 10px; border-radius: 10px; background: var(--panel); border: 1px solid var(--border); box-shadow: 0 10px 30px rgb(0 0 0 / 0.2); white-space: normal; }
+.sel-popover { position: absolute; top: calc(100% + 6px); right: 0; z-index: 21; width: 236px; padding: 10px; border-radius: 10px; background: var(--panel); border: 1px solid var(--border); box-shadow: 0 10px 30px rgb(0 0 0 / 0.2); white-space: normal; }
 .sel-popover-row { display: flex; gap: 6px; align-items: center; }
 .sel-popover-row input:not([type='color']) { flex: 1; min-width: 0; width: auto; }
 .sel-tokens { display: grid; grid-template-columns: repeat(8, 1fr); gap: 4px; margin-top: 8px; max-height: 130px; overflow: auto; }

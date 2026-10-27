@@ -5,6 +5,7 @@ import { DIRECTIONS, gradientActions } from './Gradient.tsx';
 import { ColorInput, CommitInput, numberOf } from './fields.tsx';
 import { mergedStyle, targetSourceOf, tokensFor, type Token } from './styleModel.ts';
 import { displayValue, isToken, parseInput, toHex } from './values.ts';
+import { PALETTE_GAP, PALETTE_WIDTH, type PaletteSide, paletteSide } from './palette.ts';
 
 interface Props {
   selection: Selection;
@@ -24,30 +25,31 @@ const TEXT_NAMES = /Text|Title|Label|Heading|Caption|Paragraph/;
 const WEIGHT_BOLD = 600;
 
 /**
- * Barre d'outils posée au-dessus de l'élément sélectionné : les réglages courants sans passer par
- * le panneau de droite (couleurs, dégradé, texte, rayon, opacité).
+ * Palette contextuelle posée à côté de l'écran, à la hauteur de l'élément sélectionné : les
+ * réglages courants sans passer par le panneau de droite (couleurs, dégradé, texte, rayon,
+ * opacité). Elle ne masque jamais l'écran ; le canevas écarte l'écran voisin pour lui faire place.
  */
 export function SelectionToolbar({ selection, rect, frame, theme, target, onEdit, onStyle, onMore }: Props) {
   const inspect = selection.inspect!;
   const computed = selection.info.computed;
   const ref = useRef<HTMLDivElement>(null);
-  const [position, setPosition] = useState<{ left: number; top: number } | null>(null);
+  const [position, setPosition] = useState<{ left: number; top: number; side: PaletteSide } | null>(null);
   const [open, setOpen] = useState<string | null>(null);
 
-  // Suit l'élément quand le canevas bouge (déplacement, zoom) : position relue à chaque image.
+  // Suit l'écran quand le canevas bouge (déplacement, zoom) : position relue à chaque image.
   useLayoutEffect(() => {
     let frameId = 0;
     const update = () => {
       const box = frame.getBoundingClientRect();
       const scale = box.width / (frame.offsetWidth || 1);
-      const height = ref.current?.offsetHeight ?? 36;
-      const width = ref.current?.offsetWidth ?? 300;
-      // Dans le canevas : jamais par-dessus les panneaux latéraux ni la barre du haut.
-      const area = document.querySelector('main.canvas')?.getBoundingClientRect() ?? { left: 0, top: 0, right: window.innerWidth };
-      let top = box.top + rect.y * scale - height - 10;
-      if (top < area.top + 8) top = box.top + (rect.y + rect.height) * scale + 10;
-      const left = Math.max(area.left + 8, Math.min(box.left + rect.x * scale, area.right - width - 8));
-      setPosition((p) => (p && Math.abs(p.left - left) < 0.5 && Math.abs(p.top - top) < 0.5 ? p : { left, top }));
+      const height = ref.current?.offsetHeight ?? 200;
+      const area = document.querySelector('main.canvas')?.getBoundingClientRect() ?? { left: 0, top: 0, right: window.innerWidth, bottom: window.innerHeight };
+      const side = paletteSide(box.left, box.right, area.left, area.right);
+      const left = Math.max(area.left + 8, Math.min(side === 'right' ? box.right + PALETTE_GAP : box.left - PALETTE_GAP - PALETTE_WIDTH, area.right - PALETTE_WIDTH - 8));
+      // À la hauteur de l'élément, sans dépasser l'écran ni le canevas.
+      const wanted = box.top + rect.y * scale;
+      const top = Math.max(area.top + 8, Math.min(wanted, box.bottom - height, area.bottom - height - 8));
+      setPosition((p) => (p && p.side === side && Math.abs(p.left - left) < 0.5 && Math.abs(p.top - top) < 0.5 ? p : { left, top, side }));
       frameId = requestAnimationFrame(update);
     };
     update();
@@ -98,122 +100,155 @@ export function SelectionToolbar({ selection, rect, frame, theme, target, onEdit
   const align = written('textAlign').replace(/'/g, '') || computed.textAlign;
   const radius = number('borderRadius', 'borderTopLeftRadius');
   const opacity = numberOf(written('opacity')) ?? numberOf(computed.opacity) ?? 1;
-
-  if (!position) return <div ref={ref} className="sel-toolbar" style={{ visibility: 'hidden' }} />;
+  const direction = gradient ? DIRECTIONS.find((d) => d.value === gradient.direction) : undefined;
 
   return (
-    <div ref={ref} className="sel-toolbar" style={{ left: position.left, top: position.top }} onPointerDown={(e) => e.stopPropagation()}>
-      {styleEditable && !(gradient?.own) && (
-        <ColorButton
-          id="bg"
-          open={open}
-          setOpen={setOpen}
-          title="Couleur de fond"
-          icon="▣"
-          color={colorOf('backgroundColor', computed.backgroundColor)}
-          value={written('backgroundColor')}
-          tokens={colorTokens}
-          onPick={(raw) => setColor('backgroundColor', raw)}
-          onRemove={merged.has('backgroundColor') ? () => onStyle('backgroundColor', { kind: 'remove' }) : undefined}
-        />
+    <div
+      ref={ref}
+      className={`sel-palette ${position?.side ?? 'right'}`}
+      style={position ? { left: position.left, top: position.top, width: PALETTE_WIDTH } : { visibility: 'hidden', width: PALETTE_WIDTH }}
+      onPointerDown={(e) => e.stopPropagation()}
+    >
+      <div className="sel-head">
+        <strong title={inspect.loc}>{inspect.name}</strong>
+        {componentFile && (
+          <span className="sel-warn" title={`Élément défini dans ${componentFile} : le modifier ici change toutes les instances de ce composant. Pour ne changer que cet endroit, sélectionnez l'instance dans le fil d'Ariane (panneau de droite).`}>
+            toutes les instances
+          </span>
+        )}
+        {shared > 1 && (
+          <span className="sel-warn" title="Le style modifié est partagé : la modification touche tous les éléments qui l'utilisent (changez la cible dans le panneau de droite).">
+            partagé ×{shared}
+          </span>
+        )}
+      </div>
+
+      {!styleEditable && <p className="hint small">Style calculé : modifiable dans le code.</p>}
+
+      {styleEditable && !gradient?.own && (
+        <div className="sel-row">
+          <span className="sel-name">Fond</span>
+          <ColorButton
+            id="bg"
+            open={open}
+            setOpen={setOpen}
+            title="Couleur de fond"
+            color={colorOf('backgroundColor', computed.backgroundColor)}
+            value={written('backgroundColor')}
+            tokens={colorTokens}
+            onPick={(raw) => setColor('backgroundColor', raw)}
+            onRemove={merged.has('backgroundColor') ? () => onStyle('backgroundColor', { kind: 'remove' }) : undefined}
+          />
+        </div>
       )}
+
       {grad && (
-        <span className="sel-group" title={gradient!.own ? 'Dégradé' : `Dégradé du calque de fond <${gradient!.name}>`}>
-          {grad.stops
-            ? grad.stops.map((stop, i) => (
+        <div className="sel-row" title={gradient!.own ? 'Dégradé' : `Dégradé du calque de fond <${gradient!.name}>`}>
+          <span className="sel-name">Dégradé</span>
+          <span className="sel-inline">
+            {grad.stops ? (
+              grad.stops.map((stop, i) => (
                 <ColorButton
                   key={i}
                   id={`stop-${i}`}
                   open={open}
                   setOpen={setOpen}
                   title={`Couleur ${i + 1} du dégradé`}
+                  compact
                   color={grad.colorOf(stop, i)}
                   value={displayValue(stop)}
                   tokens={colorTokens}
                   onPick={(raw) => grad.setStop(i, raw)}
                 />
               ))
-            : <span className="muted small">dégradé calculé</span>}
-          <button
-            className="sel-btn"
-            title={`Direction : ${DIRECTIONS.find((d) => d.value === gradient!.direction)?.label ?? 'personnalisée'} (clic : suivante)`}
-            onClick={() => grad.cycleDirection()}
-          >
-            {DIRECTIONS.find((d) => d.value === gradient!.direction)?.short ?? '⤡'}
-          </button>
-        </span>
+            ) : (
+              <span className="muted small">calculé</span>
+            )}
+            <button className="sel-btn" title={`Direction : ${direction?.label ?? 'personnalisée'} (clic : suivante)`} onClick={() => grad.cycleDirection()}>
+              {direction?.short ?? '⤡'}
+            </button>
+          </span>
+        </div>
       )}
 
       {styleEditable && isText && (
-        <span className="sel-group">
-          <ColorButton
-            id="color"
-            open={open}
-            setOpen={setOpen}
-            title="Couleur du texte"
-            icon="A"
-            color={colorOf('color', computed.color)}
-            value={written('color')}
-            tokens={colorTokens}
-            onPick={(raw) => setColor('color', raw)}
-            onRemove={merged.has('color') ? () => onStyle('color', { kind: 'remove' }) : undefined}
-          />
-          <button className="sel-btn" title="Texte plus petit" onClick={() => onStyle('fontSize', { kind: 'literal', value: Math.max(1, Math.round(fontSize) - 1) })}>
-            A−
-          </button>
-          <NumberInput value={Math.round(fontSize)} title="Taille du texte" onCommit={(v) => onStyle('fontSize', { kind: 'literal', value: Math.max(1, v) })} />
-          <button className="sel-btn" title="Texte plus grand" onClick={() => onStyle('fontSize', { kind: 'literal', value: Math.round(fontSize) + 1 })}>
-            A+
-          </button>
-          <button
-            className={`sel-btn ${weight >= WEIGHT_BOLD ? 'on' : ''}`}
-            title="Gras"
-            style={{ fontWeight: 800 }}
-            onClick={() => onStyle('fontWeight', { kind: 'literal', value: weight >= WEIGHT_BOLD ? '400' : '700' })}
-          >
-            B
-          </button>
-          {(['left', 'center', 'right'] as const).map((a) => (
-            <button
-              key={a}
-              className={`sel-btn ${align === a || (a === 'left' && (align === 'start' || !align)) ? 'on' : ''}`}
-              title={{ left: 'Aligné à gauche', center: 'Centré', right: 'Aligné à droite' }[a]}
-              onClick={() => onStyle('textAlign', { kind: 'literal', value: a })}
-            >
-              {{ left: '⇤', center: '↔', right: '⇥' }[a]}
-            </button>
-          ))}
-        </span>
+        <>
+          <div className="sel-section">Texte</div>
+          <div className="sel-row">
+            <span className="sel-name">Couleur</span>
+            <ColorButton
+              id="color"
+              open={open}
+              setOpen={setOpen}
+              title="Couleur du texte"
+              color={colorOf('color', computed.color)}
+              value={written('color')}
+              tokens={colorTokens}
+              onPick={(raw) => setColor('color', raw)}
+              onRemove={merged.has('color') ? () => onStyle('color', { kind: 'remove' }) : undefined}
+            />
+          </div>
+          <div className="sel-row">
+            <span className="sel-name">Taille</span>
+            <span className="sel-inline">
+              <button className="sel-btn" title="Texte plus petit" onClick={() => onStyle('fontSize', { kind: 'literal', value: Math.max(1, Math.round(fontSize) - 1) })}>
+                −
+              </button>
+              <NumberInput value={Math.round(fontSize)} title="Taille du texte" onCommit={(v) => onStyle('fontSize', { kind: 'literal', value: Math.max(1, v) })} />
+              <button className="sel-btn" title="Texte plus grand" onClick={() => onStyle('fontSize', { kind: 'literal', value: Math.round(fontSize) + 1 })}>
+                +
+              </button>
+            </span>
+          </div>
+          <div className="sel-row">
+            <span className="sel-name">Style</span>
+            <span className="sel-inline">
+              <button
+                className={`sel-btn ${weight >= WEIGHT_BOLD ? 'on' : ''}`}
+                title="Gras"
+                style={{ fontWeight: 800 }}
+                onClick={() => onStyle('fontWeight', { kind: 'literal', value: weight >= WEIGHT_BOLD ? '400' : '700' })}
+              >
+                B
+              </button>
+              {(['left', 'center', 'right'] as const).map((a) => (
+                <button
+                  key={a}
+                  className={`sel-btn ${align === a || (a === 'left' && (align === 'start' || !align)) ? 'on' : ''}`}
+                  title={{ left: 'Aligné à gauche', center: 'Centré', right: 'Aligné à droite' }[a]}
+                  onClick={() => onStyle('textAlign', { kind: 'literal', value: a })}
+                >
+                  {{ left: '⇤', center: '↔', right: '⇥' }[a]}
+                </button>
+              ))}
+            </span>
+          </div>
+        </>
       )}
 
       {styleEditable && (
-        <span className="sel-group">
-          <span className="sel-label" title="Rayon des coins">◜</span>
-          <NumberInput value={Math.round(radius)} title="Rayon des coins (ou tirez les points dans les coins de l'élément)" onCommit={(v) => onStyle('borderRadius', { kind: 'literal', value: Math.max(0, v) })} />
-          <span className="sel-label" title="Opacité">◐</span>
-          <NumberInput
-            value={Math.round(opacity * 100)}
-            suffix="%"
-            step={10}
-            title="Opacité"
-            onCommit={(v) => onStyle('opacity', v >= 100 ? { kind: 'remove' } : { kind: 'literal', value: Math.max(0, Math.min(100, v)) / 100 })}
-          />
-        </span>
+        <>
+          <div className="sel-section">Forme</div>
+          <div className="sel-row">
+            <span className="sel-name">Rayon</span>
+            <NumberInput value={Math.round(radius)} title="Rayon des coins (ou tirez les points dans les coins de l'élément)" onCommit={(v) => onStyle('borderRadius', { kind: 'literal', value: Math.max(0, v) })} />
+          </div>
+          <div className="sel-row">
+            <span className="sel-name">Opacité</span>
+            <NumberInput
+              value={Math.round(opacity * 100)}
+              suffix="%"
+              step={10}
+              title="Opacité"
+              onCommit={(v) => onStyle('opacity', v >= 100 ? { kind: 'remove' } : { kind: 'literal', value: Math.max(0, Math.min(100, v)) / 100 })}
+            />
+          </div>
+          <p className="hint small sel-tip">Marges, espacement, taille : tirez les poignées sur l'élément.</p>
+        </>
       )}
 
-      {componentFile && (
-        <span className="sel-warn" title={`Élément défini dans ${componentFile} : le modifier ici change toutes les instances de ce composant. Pour ne changer que cet endroit, sélectionnez l'instance dans le fil d'Ariane (panneau de droite).`}>
-          toutes les instances
-        </span>
-      )}
-      {shared > 1 && (
-        <span className="sel-warn" title="Le style modifié est partagé : la modification touche tous les éléments qui l'utilisent (changez la cible dans le panneau de droite).">
-          partagé ×{shared}
-        </span>
-      )}
-      {!styleEditable && <span className="muted small">Style calculé : modifiable dans le code</span>}
-      <button className="sel-btn" title="Tous les réglages (panneau de droite)" onClick={onMore}>
-        ⋯
+      <button className="sel-more" title="Tous les réglages (panneau de droite)" onClick={onMore}>
+        Tous les réglages ⋯
       </button>
     </div>
   );
@@ -231,12 +266,15 @@ function ColorButton({
   tokens,
   onPick,
   onRemove,
+  compact,
 }: {
   id: string;
   open: string | null;
   setOpen: (id: string | null) => void;
   title: string;
   icon?: string;
+  /** Pastille seule, sans la valeur à côté (couleurs d'un dégradé). */
+  compact?: boolean;
   color: string | null;
   value: string;
   tokens: Token[];
@@ -252,6 +290,7 @@ function ColorButton({
       <button className={`sel-btn ${open === id ? 'on' : ''}`} title={value ? `${title} : ${value}` : title} onClick={() => setOpen(open === id ? null : id)}>
         {icon && <span className="sel-icon">{icon}</span>}
         <span className="sel-swatch" style={{ background: color ?? 'transparent' }} />
+        {!compact && <span className={`sel-value ${isTokenText(value) ? 'token-value' : ''}`}>{value ? value.replace(/^[A-Za-z_$][\w$]*\./, '') : color ? color.toUpperCase() : 'aucune'}</span>}
       </button>
       {open === id && (
         <div className="sel-popover" role="dialog" aria-label={title}>
