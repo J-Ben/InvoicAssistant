@@ -136,3 +136,12 @@ test("insérer ajoute l'élément et son import", () => {
   assert.ok(read().includes(`import { View, Text, ScrollView } from 'react-native';`), read());
   assert.ok(read().includes('            <Text>Un</Text>\n            <ScrollView />\n'), read());
 });
+
+test('import : un composant déjà importé par un alias n\'est pas réimporté', async () => {
+  const { ensureImport } = await import('../src/server/structure.ts');
+  const { parse: parseCode } = await import('../src/server/ast.ts');
+  const src = parseCode(`import { AppText } from '@presentation/components/atoms/AppText';\nexport const A = () => <AppText />;\n`, 'A.tsx');
+  assert.deepEqual(ensureImport(src, 'AppText', '../src/presentation/components/atoms/AppText'), []);
+  const other = parseCode(`import { AppText } from 'some-lib';\nexport const A = () => <AppText />;\n`, 'A.tsx');
+  assert.throws(() => ensureImport(other, 'AppText', '../src/presentation/components/atoms/AppText'), /déjà défini/);
+});

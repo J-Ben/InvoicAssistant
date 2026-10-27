@@ -38,7 +38,19 @@ export function takeDraggedComponent(): { name: string; file: string | null } | 
   return c;
 }
 
-const CONTAINERS = new Set(['View', 'ScrollView', 'SafeAreaView', 'KeyboardAvoidingView', 'Pressable', 'TouchableOpacity', 'TouchableHighlight']);
+/** Début du glisser d'un composant (onglet Composants, barre de la bibliothèque) vers un écran ou les calques. */
+export function startComponentDrag(e: React.DragEvent, c: { name: string; file: string | null }) {
+  dragging = { kind: 'component', name: c.name, file: c.file };
+  lastComponent = { name: c.name, file: c.file };
+  e.dataTransfer.setData(DRAG_TYPE, c.name);
+  e.dataTransfer.effectAllowed = 'copy';
+}
+
+export function endComponentDrag() {
+  dragging = null;
+}
+
+export const CONTAINERS = new Set(['View', 'ScrollView', 'SafeAreaView', 'KeyboardAvoidingView', 'Pressable', 'TouchableOpacity', 'TouchableHighlight']);
 const fileOf = (loc: string) => loc.split(':')[0];
 
 export function Sidebar(props: Props) {
@@ -250,13 +262,8 @@ function Components({ project, selection, onEdit }: Props) {
               className="component-item"
               draggable
               aria-disabled={!selection}
-              onDragStart={(e) => {
-                dragging = { kind: 'component', name: c.name, file: c.file };
-                lastComponent = { name: c.name, file: c.file };
-                e.dataTransfer.setData(DRAG_TYPE, c.name);
-                e.dataTransfer.effectAllowed = 'copy';
-              }}
-              onDragEnd={() => (dragging = null)}
+              onDragStart={(e) => startComponentDrag(e, c)}
+              onDragEnd={endComponentDrag}
               onClick={() => insert(c)}
               title={c.file ?? 'react-native'}
             >

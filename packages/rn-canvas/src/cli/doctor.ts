@@ -145,10 +145,10 @@ export function diagnose(root: string): Check[] {
   const checks: Check[] = [];
   const add = (level: Level, title: string, extra: Omit<Check, 'level' | 'title'> = {}) => checks.push({ level, title, ...extra });
 
-  // Node
+  // Node : même minimum qu'Expo SDK 58 (les tests du package, eux, demandent Node 22.18).
   const [major, minor] = process.versions.node.split('.').map(Number);
-  if (major > 22 || (major === 22 && minor >= 18)) add('ok', `Node ${process.versions.node}`);
-  else add('error', `Node ${process.versions.node} : trop ancien`, { fix: 'Installez Node 22.18 ou plus récent.' });
+  if (major > 20 || (major === 20 && minor >= 19)) add('ok', `Node ${process.versions.node}`);
+  else add('error', `Node ${process.versions.node} : trop ancien`, { fix: 'Installez Node 20.19 ou plus récent.' });
 
   const pkg = readJson(path.join(root, 'package.json'));
   if (!pkg) {

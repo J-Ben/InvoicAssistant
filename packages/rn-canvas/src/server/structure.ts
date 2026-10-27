@@ -187,6 +187,12 @@ export function ensureImport(src: SourceFile, name: string, from: string): Patch
   const imports: AstNode[] = program.body.filter((s: AstNode) => s.type === 'ImportDeclaration');
   const existing = imports.find((d) => d.importKind !== 'type' && d.source.value === from);
   if (existing?.specifiers.some((s: AstNode) => s.type === 'ImportSpecifier' && s.local.name === name)) return [];
+  // Déjà importé sous un autre chemin vers le même module (alias `@presentation/…` au lieu d'un chemin relatif).
+  const moduleName = (source: string) => source.replace(/\/index$/, '').split('/').pop();
+  const sameModule = imports.some(
+    (d) => d.importKind !== 'type' && moduleName(d.source.value) === moduleName(from) && d.specifiers.some((s: AstNode) => s.local.name === name),
+  );
+  if (sameModule) return [];
   if (moduleScope(src.ast).includes(name)) throw new SourceError(`« ${name} » est déjà défini dans ce fichier par autre chose.`);
 
   const named: AstNode[] = existing?.specifiers.filter((s: AstNode) => s.type === 'ImportSpecifier') ?? [];

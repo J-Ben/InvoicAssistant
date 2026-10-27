@@ -80,13 +80,15 @@ interface Props {
   frames: Map<string, HTMLIFrameElement>;
   onActivate: (id: string) => void;
   empty: boolean;
+  /** Barres flottantes (bibliothèque) posées sur le canevas. */
+  children?: React.ReactNode;
 }
 
 /**
  * Canevas infini : déplacement (glisser le fond, molette), zoom (Ctrl/⌘ + molette, boutons).
  * Un écran se déplace en glissant son nom ; sa position est mémorisée (bouton ⊞ : grille d'origine).
  */
-export function Canvas({ appUrl, isolateStories, stories, allStories, device, activeStory, errors, loaded, generations, flows, frames, onActivate, empty }: Props) {
+export function Canvas({ appUrl, isolateStories, stories, allStories, device, activeStory, errors, loaded, generations, flows, frames, onActivate, empty, children }: Props) {
   const viewport = useRef<HTMLDivElement>(null);
   // Vue mémorisée : ni un rechargement ni l'ajout / le masquage d'un écran ne la réinitialisent.
   const [view, setView] = useState<View>(() => readView() ?? { x: PADDING, y: PADDING, zoom: 0.75 });
@@ -345,6 +347,7 @@ export const Default = { props: {} };`}</pre>
         </div>
       )}
       {flowLayout && <FlowLegend layout={flowLayout} />}
+      {children}
       <div className="zoom-controls">
         <button onClick={() => zoomAt(1 / 1.2, ...center())} aria-label="Dézoomer">−</button>
         <button onClick={fit} title="Tout afficher">{Math.round(view.zoom * 100)} %</button>

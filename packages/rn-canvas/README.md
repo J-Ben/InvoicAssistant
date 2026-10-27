@@ -9,7 +9,7 @@
 ## Prérequis
 
 - Un projet Expo qui tourne sur le web (`react-native-web`, `react-dom`, `@expo/metro-runtime`).
-- Node 22.18 ou plus récent.
+- Node 20.19 ou plus récent (comme Expo SDK 58). Les tests du package demandent Node 22.18.
 
 ## Installation
 
@@ -109,6 +109,7 @@ Ouvrez **http://localhost:7007**.
 - **Composants** : l'onglet liste les composants exportés par le projet et quelques primitives React Native. Un clic insère le composant dans l'élément sélectionné (s'il s'agit d'un conteneur) ou juste après ; on peut aussi le **glisser sur l'écran** ou vers les calques. L'import est ajouté, et les props obligatoires (lues dans l'interface `NomProps`) reçoivent des valeurs d'exemple.
 - **Thème de l'éditeur** : le bouton Système / Clair / Sombre de la barre du haut. Le choix est mémorisé dans le navigateur.
 - **Flux** (projets expo-router) : le bouton ⇢ Flux dessine les liens de navigation lus dans le code (`router.push/replace/navigate`, `<Link href>`), du bouton exact vers l'écran visé. Survolez un écran pour mettre ses liens en avant. La légende compte les liens vers des écrans absents du canevas et les boutons non affichés dans l'état actuel (liste vide…). Une cible calculée (`router.push(route)`) n'est pas lisible dans le code et n'apparaît pas.
+- **Barre de la bibliothèque** (en bas du canevas) : Texte, Bouton, Champ et Conteneur (composants du projet comme `AppText`, `Button`, `Input` s'ils existent, sinon les primitives React Native), puis les atomes, molécules, organismes et autres composants du projet, avec recherche. Un clic insère dans l'élément sélectionné (conteneur) ou juste après, sinon dans l'écran actif ; on peut aussi glisser sur un écran.
 - **Clic droit** sur un élément (dans l'écran ou dans les calques) : Dupliquer, Copier le code JSX, Copier l'emplacement, Ouvrir dans VS Code, Sélectionner le parent, Supprimer.
 - **Dégradés** (`expo-linear-gradient`, `react-native-linear-gradient`) : la section « Fond dégradé » apparaît pour un `LinearGradient` ou pour un élément dont c'est le calque de fond (`absoluteFill`). Aperçu, couleurs réellement rendues (même calculées), modification de chaque couleur (valeur ou jeton du thème), ajout / retrait, direction.
 - **Version** : affichée à côté du nom du projet, pour vérifier quelle version de l'éditeur tourne.

@@ -1,12 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { CanvasMode, EditorMessage, EditRequest, FlowLink, HistoryState, InspectResult, LayerNode, Payload, ProjectInfo, Rect, RuntimeMessage, SelectionInfo } from '../shared/protocol.ts';
+import type { CanvasMode, ComponentEntry, EditorMessage, EditRequest, FlowLink, HistoryState, InsertPosition, InspectResult, LayerNode, Payload, ProjectInfo, Rect, RuntimeMessage, SelectionInfo } from '../shared/protocol.ts';
 import { api } from './api.ts';
 import { Canvas, DEVICES, type Device, type LoadState } from './Canvas.tsx';
 import { parseLoc } from '../shared/protocol.ts';
 import { useEditorTab } from './tab.ts';
 import { ContextMenu } from './ContextMenu.tsx';
 import { Inspector } from './Inspector.tsx';
-import { Sidebar, takeDraggedComponent } from './Sidebar.tsx';
+import { CONTAINERS, Sidebar, takeDraggedComponent } from './Sidebar.tsx';
+import { LibraryBar } from './LibraryBar.tsx';
 
 type ThemePref = 'system' | 'light' | 'dark';
 /** Version et date de construction, injectées par build.mjs. */
@@ -382,6 +383,19 @@ export function App() {
     [selection, activeStory, selectLoc, send, loadProject],
   );
 
+  // Barre de la bibliothèque : dans la sélection (conteneur) ou juste après ; sinon dans l'écran actif.
+  const rootLayer = activeStory ? trees[activeStory]?.[0] : undefined;
+  const insertTarget = selection
+    ? { loc: selection.info.loc, name: selection.info.name, position: (CONTAINERS.has(selection.info.name) ? 'inside' : 'after') as InsertPosition }
+    : rootLayer
+      ? { loc: rootLayer.loc, name: rootLayer.name, position: 'inside' as InsertPosition }
+      : null;
+  const insertTargetLabel = insertTarget && `${insertTarget.position === 'inside' ? 'dans' : 'après'} <${insertTarget.name}>`;
+  const insertComponent = (c: ComponentEntry) => {
+    if (!insertTarget) return;
+    edit({ op: 'insert', loc: insertTarget.loc, name: insertTarget.name, position: insertTarget.position, component: { name: c.name, file: c.file } });
+  };
+
   // ⌘Z / ⇧⌘Z (ou ⌘Y) : annuler / rétablir. Dans un champ de saisie, on laisse l'annulation du champ.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -533,7 +547,9 @@ export function App() {
           frames={frames.current}
           onActivate={setActiveStory}
           empty={stories.length === 0}
-        />
+        >
+          <LibraryBar components={project.components} target={insertTargetLabel} onInsert={insertComponent} />
+        </Canvas>
       )}
 
       <Inspector
