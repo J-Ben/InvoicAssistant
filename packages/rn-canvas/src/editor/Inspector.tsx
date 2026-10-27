@@ -1,9 +1,10 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 import type { EditRequest, InspectResult, SourceValue, StyleSource, StyleTarget, ThemeInfo, ValueOrigin } from '../shared/protocol.ts';
 import type { Selection } from './App.tsx';
 import { GradientSection } from './Gradient.tsx';
 import { type Choice, ColorInput, CommitInput, NumberField, SegmentedField, SelectField, TokenPicker } from './fields.tsx';
 import { displayValue, isColorKey, isToken, parseInput, toHex } from './values.ts';
+import { mergedStyle, styleEntries, targetSourceOf, tokensFor } from './styleModel.ts';
 
 interface Props {
   selection: Selection | null;
@@ -11,6 +12,9 @@ interface Props {
   root: string;
   onSelectAncestor: (loc: string) => void;
   onEdit: (request: EditRequest) => void | Promise<unknown>;
+  /** Source des styles modifiée (partagée avec la barre flottante). */
+  target: StyleTarget;
+  onTarget: (target: StyleTarget) => void;
 }
 
 const GROUPS: { title: string; keys: string[] }[] = [
@@ -64,12 +68,7 @@ function targetKey(t: StyleTarget) {
   return t.kind === 'instance' ? 'instance' : t.ref;
 }
 
-function defaultTarget(sources: StyleSource[]): StyleTarget {
-  const own = [...sources].reverse().find((s) => s.kind === 'stylesheet' && s.usages === 1);
-  return own ? { kind: 'stylesheet', ref: own.ref } : { kind: 'instance' };
-}
-
-export function Inspector({ selection, theme, root, onSelectAncestor, onEdit }: Props) {
+export function Inspector({ selection, theme, root, onSelectAncestor, onEdit, target, onTarget }: Props) {
   if (!selection) {
     return (
       <aside className="sidebar right">
@@ -136,6 +135,8 @@ export function Inspector({ selection, theme, root, onSelectAncestor, onEdit }: 
             computed={info.computed}
             theme={theme}
             onEdit={onEdit}
+            target={target}
+            setTarget={onTarget}
             parent={info.ancestors[1] ?? null}
             onSelectParent={() => info.ancestors[1] && onSelectAncestor(info.ancestors[1].loc)}
           />
@@ -150,6 +151,8 @@ interface DetailsProps {
   computed: Record<string, string>;
   theme: ThemeInfo | null;
   onEdit: Props['onEdit'];
+  target: StyleTarget;
+  setTarget: (target: StyleTarget) => void;
   /** L'instance qui englobe l'élément (là où se règlent ses props). */
   parent: { loc: string; name: string } | null;
   onSelectParent: () => void;
@@ -177,38 +180,24 @@ function Origins({ origins, parent, onSelectParent }: { origins?: ValueOrigin[];
   );
 }
 
-function Details({ inspect, computed, theme, onEdit, parent, onSelectParent }: DetailsProps) {
+function Details({ inspect, computed, theme, onEdit, target, setTarget, parent, onSelectParent }: DetailsProps) {
   const { loc, name } = inspect;
   const sources = inspect.style.sources;
-  const [target, setTarget] = useState<StyleTarget>(() => defaultTarget(sources));
   const [newKey, setNewKey] = useState('');
 
-  useEffect(() => {
-    // Après une édition, la source ciblée doit toujours exister.
-    if (target.kind === 'stylesheet' && !sources.some((s) => s.ref === target.ref)) setTarget(defaultTarget(sources));
-  }, [sources, target]);
-
-  // Jetons utilisables ici, sous le nom par lequel ce fichier y accède (export ou alias du thème).
-  const tokens = useMemo(() => {
-    if (!theme) return [];
-    const names = [theme.exportName, theme.alias].filter((n): n is string => Boolean(n) && inspect.scope.includes(n!));
-    const via = names.includes(theme.alias ?? '') ? theme.alias! : names[0];
-    if (!via) return [];
-    return theme.tokens.map((t) => {
-      const value = displayValue(t.value);
-      return { path: `${via}.${t.path.split('.').slice(1).join('.')}`, value, hex: toHex(value) };
-    });
-  }, [theme, inspect.scope]);
+  const tokens = useMemo(() => tokensFor(theme, inspect.scope), [theme, inspect.scope]);
   const colorTokens = tokens.filter((t) => t.hex);
   const tokenValue = (code: string) => tokens.find((t) => t.path === code)?.value;
 
-  // Valeur effective (la dernière source l'emporte) et source d'origine de chaque clé.
-  const merged = new Map<string, { value: SourceValue; from: string }>();
-  for (const s of sources) for (const p of s.properties) if (!p.key.startsWith('...')) merged.set(p.key, { value: p.value, from: s.ref });
-  const targetSource = sources.find((s) => (target.kind === 'instance' ? s.kind === 'inline' && s === sources[sources.length - 1] : s.ref === target.ref));
+  const merged = mergedStyle(sources);
+  const targetSource = targetSourceOf(sources, target);
   const inTarget = new Set(targetSource?.properties.map((p) => p.key));
 
-  const setStyle = (key: string, raw: string) => onEdit({ op: 'setStyle', loc, name, key, value: parseInput(raw, inspect.scope, { style: true }), target });
+  // Un raccourci (padding, borderRadius…) remplace aussi les variantes plus précises déjà écrites.
+  const setStyle = (key: string, raw: string) => {
+    const entries = styleEntries(inspect, target, key, parseInput(raw, inspect.scope, { style: true }));
+    return onEdit(entries.length > 1 ? { op: 'setStyles', loc, name, entries, target } : { op: 'setStyle', loc, name, key, value: entries[0].value, target });
+  };
   const removeStyle = (key: string) => onEdit({ op: 'setStyle', loc, name, key, value: { kind: 'remove' }, target });
 
   const extraKeys = [...merged.keys()].filter((k) => !GROUPED.has(k));
@@ -321,7 +310,7 @@ function Details({ inspect, computed, theme, onEdit, parent, onSelectParent }: D
         <GradientSection gradient={inspect.gradient} rendered={computed.backgroundImage} scope={inspect.scope} tokens={tokens} onEdit={onEdit} />
       )}
 
-      <section className="section">
+      <section className="section" id="inspector-style">
         <h3>Style</h3>
         {!inspect.style.editable ? (
           <p className="code">{inspect.style.code}</p>

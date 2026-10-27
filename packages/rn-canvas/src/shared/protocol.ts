@@ -80,7 +80,13 @@ export type RuntimeMessage =
   /** Clic sur un aperçu : composant à insérer (`fichier#Nom`). */
   | { source: 'rn-canvas'; type: 'pick'; story: string; key: string }
   /** « Ouvrir en grand » sur la vignette d'une modale : écran dédié dans le canevas. */
-  | { source: 'rn-canvas'; type: 'open'; story: string; key: string };
+  | { source: 'rn-canvas'; type: 'open'; story: string; key: string }
+  /** Poignée relâchée sur l'élément sélectionné : style à écrire (`value` en px, ou null pour retirer). */
+  | { source: 'rn-canvas'; type: 'style-drag'; story: string; loc: Loc; key: string; value: number }
+  /** Texte modifié sur place (double-clic sur un texte sélectionné). */
+  | { source: 'rn-canvas'; type: 'text-edit'; story: string; loc: Loc; value: string }
+  /** Position de l'élément sélectionné dans l'écran, à chaque changement (barre d'outils de l'éditeur). */
+  | { source: 'rn-canvas'; type: 'selection-rect'; story: string; loc: Loc; rect: Rect | null };
 
 /** Composant à prévisualiser dans le cadre des aperçus. */
 export interface GalleryItem {
@@ -109,7 +115,25 @@ export type EditorMessage =
   /** Position des éléments donnés (mode Flux) : réponse `measured`, éléments visibles seulement. */
   | { source: 'rn-canvas-editor'; type: 'measure'; requestId: number; locs: Loc[] }
   /** Composants à afficher dans le cadre des aperçus. */
-  | { source: 'rn-canvas-editor'; type: 'gallery'; items: GalleryItem[] };
+  | { source: 'rn-canvas-editor'; type: 'gallery'; items: GalleryItem[] }
+  /** Poignées affichées sur l'élément sélectionné (selon ce que le code permet d'écrire). */
+  | { source: 'rn-canvas-editor'; type: 'handles'; loc: Loc; handles: HandleSet }
+  /** Fin de l'écriture d'un style tiré à la souris : l'aperçu en direct peut être retiré. */
+  | { source: 'rn-canvas-editor'; type: 'style-applied'; ok: boolean };
+
+/** Poignées disponibles sur l'élément sélectionné. */
+export interface HandleSet {
+  radius: boolean;
+  padding: boolean;
+  margin: boolean;
+  /** Espacement entre enfants (conteneur flex avec au moins deux enfants). */
+  gap: boolean;
+  /** Largeur / hauteur : seulement si elles sont déjà écrites (sinon l'élément garderait une taille figée). */
+  width: boolean;
+  height: boolean;
+  /** Texte modifiable sur place (double-clic). */
+  text: boolean;
+}
 
 /** Lien de navigation lu dans le code (mode Flux). */
 export interface FlowLink {
@@ -221,6 +245,8 @@ export type StyleTarget = { kind: 'instance' } | { kind: 'stylesheet'; ref: stri
 
 export type EditRequest =
   | { op: 'setStyle'; loc: Loc; name: string; key: string; value: EditValue; target: StyleTarget }
+  /** Plusieurs propriétés en une seule modification (une seule étape d'annulation). */
+  | { op: 'setStyles'; loc: Loc; name: string; entries: { key: string; value: EditValue }[]; target: StyleTarget }
   | { op: 'setText'; loc: Loc; name: string; value: string }
   | { op: 'setProp'; loc: Loc; name: string; prop: string; value: EditValue }
   | { op: 'setToken'; path: string; value: EditValue }

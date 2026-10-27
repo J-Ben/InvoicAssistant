@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { CanvasMode, ComponentEntry, EditorMessage, EditRequest, FlowLink, HistoryState, InsertPosition, InspectResult, LayerNode, Payload, ProjectInfo, Rect, RuntimeMessage, SelectionInfo } from '../shared/protocol.ts';
+import type { CanvasMode, ComponentEntry, EditValue, StyleTarget, EditorMessage, EditRequest, FlowLink, HistoryState, InsertPosition, InspectResult, LayerNode, Payload, ProjectInfo, Rect, RuntimeMessage, SelectionInfo } from '../shared/protocol.ts';
 import { api } from './api.ts';
 import { Canvas, DEVICES, type Device, type LoadState } from './Canvas.tsx';
 import { parseLoc } from '../shared/protocol.ts';
@@ -9,6 +9,9 @@ import { Inspector } from './Inspector.tsx';
 import { CONTAINERS, Sidebar, takeDraggedComponent } from './Sidebar.tsx';
 import { LibraryBar } from './LibraryBar.tsx';
 import { PagesBar, useBoard } from './Pages.tsx';
+import { SelectionToolbar } from './SelectionToolbar.tsx';
+import { defaultTarget, mergedStyle, styleEntries } from './styleModel.ts';
+import { numberOf } from './fields.tsx';
 import type { FlowMode } from './Flows.tsx';
 
 type ThemePref = 'system' | 'light' | 'dark';
@@ -281,6 +284,24 @@ export function App() {
           );
           break;
         }
+        case 'style-drag': {
+          // Poignée relâchée : une seule écriture, puis l'écran retire son aperçu.
+          const current = selectionRef.current;
+          if (!current || current.info.loc !== data.loc) {
+            send(data.story, { type: 'style-applied', ok: false });
+            break;
+          }
+          writeStyleRef.current(data.key, { kind: 'literal', value: data.value }).then((ok) => send(data.story, { type: 'style-applied', ok }));
+          break;
+        }
+        case 'text-edit': {
+          const current = selectionRef.current;
+          if (current?.info.loc === data.loc) editRef.current({ op: 'setText', loc: data.loc, name: current.info.name, value: data.value });
+          break;
+        }
+        case 'selection-rect':
+          setSelectionRect({ story: data.story, loc: data.loc, rect: data.rect });
+          break;
         case 'key':
           // Rejoue le raccourci dans l'éditeur, comme s'il avait été tapé ici.
           window.dispatchEvent(new KeyboardEvent('keydown', { key: data.key, metaKey: data.metaKey, ctrlKey: data.ctrlKey, shiftKey: data.shiftKey, altKey: data.altKey }));
@@ -357,12 +378,61 @@ export function App() {
           send(selection.story, { type: 'select', loc, name: selection.info.name });
         }
         setToast({ kind: 'ok', text: `Écrit dans ${result.file}` });
+        return true;
       } catch (e) {
         showError((e as Error).message);
+        return false;
       }
     },
     [selection, activeStory, send, selectLoc, loadProject, inspect],
   );
+
+  // Source des styles modifiée, par élément : choisie dans le panneau de droite, partagée avec la barre flottante.
+  const [targets, setTargets] = useState<Record<string, StyleTarget>>({});
+  const sources = selection?.inspect?.style.sources;
+  const chosen = selection?.inspect ? targets[selection.inspect.loc] : undefined;
+  const styleTarget: StyleTarget =
+    chosen && (chosen.kind === 'instance' || sources?.some((s) => s.ref === chosen.ref)) ? chosen : defaultTarget(sources ?? []);
+
+  /** Écrit une propriété de style de la sélection (et aligne ses variantes plus précises). */
+  const writeStyle = useCallback(
+    (key: string, value: EditValue) => {
+      const target = selection?.inspect;
+      if (!selection || !target) return Promise.resolve(false);
+      const entries = styleEntries(target, styleTarget, key, value);
+      const { loc, name } = selection.info;
+      return edit(entries.length > 1 ? { op: 'setStyles', loc, name, entries, target: styleTarget } : { op: 'setStyle', loc, name, key, value: entries[0].value, target: styleTarget });
+    },
+    [selection, styleTarget, edit],
+  );
+  const writeStyleRef = useRef(writeStyle);
+  writeStyleRef.current = writeStyle;
+  const selectionRef = useRef(selection);
+  selectionRef.current = selection;
+
+  // Poignées affichées dans l'écran : selon ce que le code de l'élément permet d'écrire.
+  useEffect(() => {
+    const target = selection?.inspect;
+    if (!selection || !target || target.loc !== selection.info.loc) return;
+    const editable = target.style.editable;
+    const merged = mergedStyle(target.style.sources);
+    send(selection.story, {
+      type: 'handles',
+      loc: selection.info.loc,
+      handles: {
+        radius: editable,
+        padding: editable,
+        margin: editable,
+        gap: editable,
+        width: editable && merged.has('width'),
+        height: editable && merged.has('height'),
+        text: Boolean(target.text?.editable),
+      },
+    });
+  }, [selection, send]);
+
+  // Position de la sélection dans son écran, pour la barre flottante.
+  const [selectionRect, setSelectionRect] = useState<{ story: string; loc: string; rect: Rect | null } | null>(null);
 
   // Variante depuis l'état d'un écran : on demande son stockage, puis on l'écrit dans le fichier canvas.
   const snapshots = useRef(new Map<number, (storage: Record<string, string>) => void>());
@@ -468,11 +538,19 @@ export function App() {
       } else if (e.key === 'd' && (e.metaKey || e.ctrlKey)) {
         e.preventDefault();
         edit({ op: 'duplicate', loc, name });
+      } else if ((e.key === 'ArrowUp' || e.key === 'ArrowDown') && (e.metaKey || e.ctrlKey || e.altKey) && selection.inspect?.style.editable) {
+        // ⌘/Ctrl + ↑/↓ : marge intérieure (padding), Alt + ↑/↓ : marge extérieure ; de 4 en 4 (Maj : 1).
+        e.preventDefault();
+        const key = e.altKey ? 'margin' : 'padding';
+        const written = numberOf(String((mergedStyle(selection.inspect.style.sources).get(key)?.value.value ?? '')));
+        const current = written ?? numberOf(selection.info.computed[`${key}Top`]) ?? 0;
+        const next = current + (e.key === 'ArrowUp' ? 1 : -1) * (e.shiftKey ? 1 : 4);
+        writeStyle(key, { kind: 'literal', value: key === 'padding' ? Math.max(0, next) : next });
       }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [selection, edit]);
+  }, [selection, edit, writeStyle]);
 
   useEffect(() => {
     if (!toast) return;
@@ -630,7 +708,29 @@ export function App() {
         root={project.root}
         onSelectAncestor={(loc) => selection && selectLoc(selection.story, loc)}
         onEdit={edit}
+        target={styleTarget}
+        onTarget={(t) => selection?.inspect && setTargets((all) => ({ ...all, [selection.inspect!.loc]: t }))}
       />
+
+      {mode === 'inspect' &&
+        !menu &&
+        tab.state === 'owner' &&
+        selection?.inspect &&
+        selectionRect?.rect &&
+        selectionRect.story === selection.story &&
+        selectionRect.loc === selection.info.loc &&
+        frames.current.get(selection.story) && (
+          <SelectionToolbar
+            selection={selection}
+            rect={selectionRect.rect}
+            frame={frames.current.get(selection.story)!}
+            theme={project.theme}
+            target={styleTarget}
+            onEdit={edit}
+            onStyle={(key, value) => writeStyle(key, value)}
+            onMore={() => document.getElementById('inspector-style')?.scrollIntoView({ behavior: 'smooth', block: 'start' })}
+          />
+        )}
 
       {menu && selection && (
         <ContextMenu

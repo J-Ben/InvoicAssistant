@@ -333,3 +333,28 @@ test('écrans générés depuis app/ : routes sans écran, paramètres, noms, ri
   assert.deepEqual(project.missingRoutes(), []);
   assert.deepEqual(project.generateRouteStories().created, []);
 });
+
+test('setStyles : plusieurs propriétés en une seule modification, une seule annulation', () => {
+  const { project, read } = fixture();
+  const target = { kind: 'stylesheet' as const, ref: 'styles.card' };
+  project.edit({ op: 'setStyle', loc: VIEW, name: 'View', key: 'paddingTop', value: { kind: 'literal', value: 4 }, target });
+  const before = read();
+  project.edit({
+    op: 'setStyles',
+    loc: VIEW,
+    name: 'View',
+    target,
+    entries: [
+      { key: 'padding', value: { kind: 'literal', value: 20 } },
+      { key: 'paddingTop', value: { kind: 'remove' } },
+      { key: 'borderRadius', value: { kind: 'literal', value: 12 } },
+    ],
+  });
+  const code = read();
+  assert.match(code, /padding: 20/);
+  assert.match(code, /borderRadius: 12/);
+  assert.doesNotMatch(code, /paddingTop/);
+  assert.match(project.history().undo ?? '', /padding, paddingTop, borderRadius/);
+  project.undo();
+  assert.equal(read(), before);
+});

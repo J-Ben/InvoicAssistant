@@ -479,6 +479,17 @@ export const Actuel: CanvasStory = {};
       case 'setStyle':
         patches = setStyle(src, element, request.key, request.value, request.target);
         break;
+      case 'setStyles': {
+        // Chaque propriété s'écrit sur le code produit par la précédente, puis le tout en une fois.
+        let current = src;
+        for (const { key, value } of request.entries) {
+          const { element: el } = findElement(current.ast, parsed.line, parsed.column, request.name);
+          const next = applyPatches(current.code, setStyle(current, el, key, value, request.target));
+          current = parse(next, parsed.file);
+        }
+        patches = current.code === src.code ? [] : [{ start: 0, end: src.code.length, text: current.code }];
+        break;
+      }
       case 'setText':
         patches = setText(src, element, request.value);
         break;
@@ -673,6 +684,8 @@ export function describe(request: EditRequest): string {
   switch (request.op) {
     case 'setStyle':
       return `${request.key} sur <${request.name}>`;
+    case 'setStyles':
+      return `${request.entries.map((e) => e.key).join(', ')} sur <${request.name}>`;
     case 'setText':
       return `texte de <${request.name}>`;
     case 'setProp':

@@ -5,8 +5,9 @@
  * Communication avec l'éditeur parent par `postMessage`.
  */
 import { createElement, Fragment, type ReactNode } from 'react';
-import type { CanvasMode, EditorMessage, InsertPosition, LayerNode, Payload, Rect, RuntimeMessage, SelectionInfo } from '../shared/protocol';
+import type { CanvasMode, EditorMessage, HandleSet, InsertPosition, LayerNode, Payload, Rect, RuntimeMessage, SelectionInfo } from '../shared/protocol';
 import { parseTag } from '../shared/protocol';
+import { createHandles } from './handles';
 
 /** Marque la frontière de l'écran : les wrappers (navigation, providers) au-dessus sont ignorés. */
 export function StoryRoot({ children }: { children?: ReactNode }) {
@@ -186,6 +187,15 @@ export function startInspector(storyId: string): InspectorHandle {
   overlay.setAttribute('data-rn-canvas-overlay', '');
   Object.assign(overlay.style, { position: 'fixed', inset: '0', pointerEvents: 'none', zIndex: '2147483647' });
   document.body.appendChild(overlay);
+  // Cadres (redessinés à chaque rendu) et poignées de la sélection, par-dessus.
+  const boxes = document.createElement('div');
+  const handleLayer = document.createElement('div');
+  overlay.append(boxes, handleLayer);
+  const handles = createHandles((message) => post(message), () => draw());
+  let handleSet: { loc: string; set: HandleSet } | null = null;
+  let lastRect = '';
+  // Texte en cours de modification sur place.
+  let editing: { node: HTMLElement; text: Text; original: string; loc: string } | null = null;
 
   const root = () => findStoryRoot(currentRootFiber());
 
@@ -204,7 +214,7 @@ export function startInspector(storyId: string): InspectorHandle {
     if (position === 'inside') Object.assign(style, { top: `${rect.y}px`, height: `${rect.height}px`, border: `2px dashed ${color}`, background: valid ? 'rgba(18, 183, 106, 0.08)' : 'rgba(240, 68, 56, 0.08)' });
     else Object.assign(style, { top: `${(position === 'before' ? rect.y : rect.y + rect.height) - 1.5}px`, height: '3px', background: color });
     Object.assign(el.style, style);
-    overlay.appendChild(el);
+    boxes.appendChild(el);
 
     const label = document.createElement('div');
     label.textContent = drop.label;
@@ -219,14 +229,15 @@ export function startInspector(storyId: string): InspectorHandle {
       font: '600 11px -apple-system, system-ui, sans-serif',
       whiteSpace: 'nowrap',
     });
-    overlay.appendChild(label);
+    boxes.appendChild(label);
   };
 
   const draw = () => {
-    overlay.replaceChildren();
+    boxes.replaceChildren();
     const r = root();
     if (!r) return;
     if (drop) {
+      handleLayer.replaceChildren();
       if (drag) paintFiber(drag.fiber, 'dragged');
       drawDrop();
       return;
@@ -248,11 +259,75 @@ export function startInspector(storyId: string): InspectorHandle {
           background: kind === 'hover' ? 'rgba(124, 92, 255, 0.08)' : 'transparent',
           borderRadius: '2px',
         });
-        overlay.appendChild(box);
+        boxes.appendChild(box);
       }
     };
-    if (mode === 'inspect' && hovered !== selected) paint(hovered, 'hover');
+    if (mode === 'inspect' && hovered !== selected && !handles.dragging()) paint(hovered, 'hover');
     paint(selected, 'selected');
+
+    // Poignées sur le premier exemplaire ; l'aperçu en direct s'applique à tous.
+    const instances = selected ? fibersAt(r, selected) : [];
+    const nodes = instances[0] ? hostNodes(instances[0]) : [];
+    const rect = nodes.length ? unionRect(nodes) : null;
+    const show = mode === 'inspect' && !editing;
+    handles.render(handleLayer, show ? selected : null, nodes[0] ?? null, rect, instances.map((f) => hostNodes(f)[0]).filter(Boolean));
+    // Position de la sélection pour la barre d'outils de l'éditeur.
+    const key = selected ? `${selected}|${rect ? [rect.x, rect.y, rect.width, rect.height].map(Math.round).join(',') : ''}|${mode}` : '';
+    if (key !== lastRect) {
+      lastRect = key;
+      if (selected) post({ type: 'selection-rect', loc: selected, rect: mode === 'inspect' ? rect : null });
+    }
+  };
+
+  /** Modification d'un texte sur place : seulement un texte simple (un seul nœud texte). */
+  const startTextEdit = (fiber: Fiber, loc: string) => {
+    const node = hostNodes(fiber)[0] as HTMLElement | undefined;
+    const text = node?.childNodes.length === 1 && node.firstChild?.nodeType === Node.TEXT_NODE ? (node.firstChild as Text) : null;
+    if (!node || !text) return false;
+    editing = { node, text, original: text.data, loc };
+    node.contentEditable = 'plaintext-only';
+    Object.assign(node.style, { outline: '2px solid #7C5CFF', outlineOffset: '2px', cursor: 'text', userSelect: 'text' });
+    node.focus();
+    const range = document.createRange();
+    range.selectNodeContents(node);
+    const sel = window.getSelection();
+    sel?.removeAllRanges();
+    sel?.addRange(range);
+    const finish = (commit: boolean) => {
+      if (!editing) return;
+      const { original } = editing;
+      // Le texte saisi reste dans le même nœud : React le retrouvera tel quel au rechargement.
+      const value = (node.innerText ?? text.data).replace(/\n$/, '');
+      node.removeEventListener('keydown', onKeyDown, true);
+      node.removeEventListener('blur', onBlur);
+      node.removeAttribute('contenteditable');
+      Object.assign(node.style, { outline: '', outlineOffset: '', cursor: '', userSelect: '' });
+      editing = null;
+      if (!commit || value === original) {
+        if (node.firstChild !== text || node.childNodes.length !== 1) node.replaceChildren(text);
+        text.data = original;
+      } else {
+        if (node.firstChild !== text || node.childNodes.length !== 1) node.replaceChildren(text);
+        text.data = value;
+        post({ type: 'text-edit', loc, value });
+      }
+      draw();
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      event.stopPropagation();
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        finish(false);
+      } else if (event.key === 'Enter' && !event.shiftKey) {
+        event.preventDefault();
+        finish(true);
+      }
+    };
+    const onBlur = () => finish(true);
+    node.addEventListener('keydown', onKeyDown, true);
+    node.addEventListener('blur', onBlur);
+    draw();
+    return true;
   };
 
   function paintFiber(fiber: Fiber, _kind: 'dragged') {
@@ -260,7 +335,7 @@ export function startInspector(storyId: string): InspectorHandle {
     if (!rect) return;
     const box = document.createElement('div');
     Object.assign(box.style, { position: 'fixed', left: `${rect.x}px`, top: `${rect.y}px`, width: `${rect.width}px`, height: `${rect.height}px`, background: 'rgba(124, 92, 255, 0.15)', borderRadius: '2px' });
-    overlay.appendChild(box);
+    boxes.appendChild(box);
   }
 
   // Niveau de sélection courant (Figma) : chemin de l'élément sélectionné, pour rester au même
@@ -351,6 +426,8 @@ export function startInspector(storyId: string): InspectorHandle {
   const select = (loc: string | null, name?: string) => {
     selected = loc;
     pending = null;
+    // Désélection (Échap) : le clic suivant repart du niveau de l'écran.
+    if (!loc) selectedPath = [];
     draw();
     const r = root();
     if (!loc || !r) return;
@@ -450,6 +527,14 @@ export function startInspector(storyId: string): InspectorHandle {
   // En mode inspection, on bloque les interactions de l'app (boutons, navigation…).
   const block = (event: Event) => {
     if (mode !== 'inspect') return;
+    // Poignées et texte en cours de modification : leurs événements leur reviennent.
+    if (handleLayer.contains(event.target as Node)) return;
+    if (editing && editing.node.contains(event.target as Node)) return;
+    if (event.type === 'click' && handles.consumeClick()) {
+      event.preventDefault();
+      event.stopPropagation();
+      return;
+    }
     event.preventDefault();
     event.stopPropagation();
     if (event.type === 'pointerdown' && (event as PointerEvent).button === 0) {
@@ -493,8 +578,16 @@ export function startInspector(storyId: string): InspectorHandle {
       // Comme dans Figma : clic = l'élément tel qu'il est écrit dans l'écran (ou au niveau où l'on
       // est déjà entré), double-clic = un niveau plus profond, Alt+clic = l'élément exact.
       const e = event as MouseEvent;
-      const fiber = pickAt(e.clientX, e.clientY, e.altKey ? 'exact' : event.type === 'dblclick' ? 'deeper' : 'level');
       const r = root();
+      // Double-clic sur le texte sélectionné : on l'écrit sur place (comme dans Figma).
+      if (event.type === 'dblclick' && handleSet?.set.text && handleSet.loc === selected && r) {
+        const current = fibersAt(r, selected).find((f) => {
+          const rect = unionRect(hostNodes(f));
+          return rect && e.clientX >= rect.x && e.clientX <= rect.x + rect.width && e.clientY >= rect.y && e.clientY <= rect.y + rect.height;
+        });
+        if (current && startTextEdit(current, selected)) return;
+      }
+      const fiber = pickAt(e.clientX, e.clientY, e.altKey ? 'exact' : event.type === 'dblclick' ? 'deeper' : 'level');
       if (fiber && r) {
         const info = selectionInfo(fiber, r);
         if (info) {
@@ -526,9 +619,10 @@ export function startInspector(storyId: string): InspectorHandle {
     }
     if (mode !== 'inspect') return;
     const target = event.target as HTMLElement | null;
-    if (target?.closest?.('input, textarea, [contenteditable="true"]')) return;
+    if (target?.isContentEditable || target?.closest?.('input, textarea, [contenteditable]')) return;
     const combo = event.metaKey || event.ctrlKey;
-    const relayed = combo ? ['z', 'y', 'd'].includes(event.key.toLowerCase()) : ['Delete', 'Backspace', 'Escape', 'v', 'i'].includes(event.key);
+    const arrow = event.key.startsWith('Arrow');
+    const relayed = combo ? ['z', 'y', 'd'].includes(event.key.toLowerCase()) || arrow : (event.altKey && arrow) || ['Delete', 'Backspace', 'Escape', 'v', 'i'].includes(event.key);
     if (!relayed) return;
     event.preventDefault();
     post({ type: 'key', key: event.key, metaKey: event.metaKey, ctrlKey: event.ctrlKey, shiftKey: event.shiftKey, altKey: event.altKey });
@@ -568,6 +662,12 @@ export function startInspector(storyId: string): InspectorHandle {
     } else if (data.type === 'hover') {
       hovered = data.loc;
       draw();
+    } else if (data.type === 'handles') {
+      handleSet = { loc: data.loc, set: data.handles };
+      handles.configure(data.loc, data.handles);
+      draw();
+    } else if (data.type === 'style-applied') {
+      handles.applied(data.ok);
     }
   };
   window.addEventListener('message', onMessage);

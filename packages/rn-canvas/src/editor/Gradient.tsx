@@ -2,7 +2,7 @@ import type { EditRequest, GradientDirection, GradientInfo, SourceValue } from '
 import { type Choice, ColorInput, CommitInput, SegmentedField, TokenPicker } from './fields.tsx';
 import { displayValue, isToken, parseInput, toHex } from './values.ts';
 
-const DIRECTIONS: (Choice & { value: GradientDirection; angle: number; start: string; end: string })[] = [
+export const DIRECTIONS: (Choice & { value: GradientDirection; angle: number; start: string; end: string })[] = [
   { value: 'vertical', label: 'De haut en bas', short: '↓', angle: 180, start: '{ x: 0, y: 0 }', end: '{ x: 0, y: 1 }' },
   { value: 'horizontal', label: 'De gauche à droite', short: '→', angle: 90, start: '{ x: 0, y: 0 }', end: '{ x: 1, y: 0 }' },
   { value: 'diagonal', label: 'En diagonale, vers le bas', short: '↘', angle: 135, start: '{ x: 0, y: 0 }', end: '{ x: 1, y: 1 }' },
@@ -26,8 +26,8 @@ interface Props {
   onEdit: (request: EditRequest) => void | Promise<unknown>;
 }
 
-/** Fond dégradé : couleurs (valeur, jeton du thème ou expression), ajout / retrait, direction. */
-export function GradientSection({ gradient, rendered, scope, tokens, onEdit }: Props) {
+/** Lecture et écriture d'un dégradé, communes au panneau de droite et à la barre flottante. */
+export function gradientActions(gradient: GradientInfo, rendered: string | undefined, scope: string[], tokens: Props['tokens'], onEdit: Props['onEdit']) {
   const { stops } = gradient;
   const live = renderedStops(rendered);
   const tokenValue = (code: string) => tokens.find((t) => t.path === code)?.value;
@@ -53,6 +53,17 @@ export function GradientSection({ gradient, rendered, scope, tokens, onEdit }: P
     await onEdit({ op: 'setProp', loc: gradient.loc, name: gradient.name, prop: 'start', value: { kind: 'expression', code: direction.start } });
     await onEdit({ op: 'setProp', loc: gradient.loc, name: gradient.name, prop: 'end', value: { kind: 'expression', code: direction.end } });
   };
+  /** Direction suivante (↓ → ↘ → ↗) ; une direction personnalisée repart de la première. */
+  const cycleDirection = () => {
+    const i = DIRECTIONS.findIndex((d) => d.value === gradient.direction);
+    return setDirection(DIRECTIONS[(i + 1) % DIRECTIONS.length].value);
+  };
+  return { stops, live, colorOf, codeOf, writeStops, setStop, setDirection, cycleDirection };
+}
+
+/** Fond dégradé : couleurs (valeur, jeton du thème ou expression), ajout / retrait, direction. */
+export function GradientSection({ gradient, rendered, scope, tokens, onEdit }: Props) {
+  const { stops, live, colorOf, codeOf, writeStops, setStop, setDirection } = gradientActions(gradient, rendered, scope, tokens, onEdit);
 
   const direction = DIRECTIONS.find((d) => d.value === gradient.direction);
   const previewColors = stops ? stops.map((s, i) => colorOf(s, i) ?? '#cccccc') : live;
