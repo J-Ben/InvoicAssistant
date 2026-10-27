@@ -62,6 +62,10 @@ export function layoutFlows(data: FlowData, frameOf: (story: string) => Box | nu
         };
         if (anchor.width > 0 && anchor.height > 0) origins.push({ story, anchor });
       }
+      // Écran jamais chargé (hors de la vue) : position du bouton inconnue, le lien part de l'écran
+      // (en pointillés) plutôt que de disparaître.
+      const unmeasured = link.sources.filter((story) => !data.rects[story] && frameOf(story));
+      for (const story of unmeasured) origins.push({ story, anchor: null });
       if (origins.length === 0) hidden++;
     } else {
       for (const story of link.sources) if (frameOf(story)) origins.push({ story, anchor: null });

@@ -125,7 +125,8 @@ export function InvoiceCard(props: { invoices: Invoice[]; project: Project; onPr
   assert.match(code, /date: new Date\('\d{4}-\d{2}-\d{2}'\)/);
   assert.match(code, /name: 'Vacances en Grèce'/);
   assert.match(code, /onPress: noop/);
-  assert.match(code, /visible: true/);
+  // Prop facultative d'ouverture : pas dans l'exemple (une modale n'y est jamais ouverte).
+  assert.ok(!/visible:/.test(code), code);
   assert.match(code, /currency: 'EUR'/);
   assert.match(code, /totalAmount: '1 250,00 €'/);
   assert.match(code, /summary: 'Texte d’exemple'|summary: 'Exemple'/);

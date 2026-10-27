@@ -59,6 +59,8 @@ function canTakeRef(component: unknown): boolean {
   return Boolean(c.prototype?.isReactComponent);
 }
 
+const OPEN_PROP = /^(visible|isVisible|open|isOpen|show|isShown|opened|presented)$/;
+
 function resolveStory(storyId: string, manifest: CanvasManifest): ResolvedStory {
   const hash = storyId.lastIndexOf('#');
   const file = storyId.slice(0, hash);
@@ -79,7 +81,10 @@ function resolveStory(storyId: string, manifest: CanvasManifest): ResolvedStory 
 
   const s = story as CanvasStoryObject;
   // Ordre : props de l'écran (valeurs de repli), puis exemple déclaré, puis props de la variante.
-  const props = { ...meta.props, ...exampleProps(manifest, meta.example, s.example), ...s.props };
+  // Un écran « Ouvrir en grand » ouvre sa modale (`visible: true` dans ses props) même si l'exemple la
+  // déclare fermée.
+  const opened = Object.fromEntries(Object.entries(meta.props ?? {}).filter(([key, value]) => value === true && OPEN_PROP.test(key)));
+  const props = { ...meta.props, ...exampleProps(manifest, meta.example, s.example), ...opened, ...s.props };
   // `navigation` et `route` du navigateur, sauf si la variante les fournit elle-même.
   const render = s.render
     ? (screen?: ScreenProps) => s.render!({ ...screen, ...props })

@@ -300,3 +300,13 @@ test("piste d'erreur : paramètre de route manquant (V8, JSC, Safari), clé abse
   assert.equal(hintFor(reading, { orderId: '1' }, story), null);
   assert.equal(hintFor(new Error('autre chose'), null, story), null);
 });
+
+test('variantes : titre déclaré dans la variante, sinon tiré du nom de l’export', async () => {
+  const { Project } = await import('../src/server/project.ts');
+  const root = project({
+    'rn-canvas.json': '{"include":["canvas"]}',
+    'canvas/Order.canvas.tsx': "export default { title: 'Commande' };\nexport const Cree = { title: 'Créée', props: {} };\nexport const SansParams = {};\n",
+  });
+  const [group] = new Project(root).stories();
+  assert.deepEqual(group.stories.map((s) => s.title), ['Créée', 'Sans Params']);
+});

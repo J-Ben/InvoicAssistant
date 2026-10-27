@@ -193,10 +193,23 @@ export function Canvas(props: Props) {
   // qu'au-delà d'une marge plus large que celle qui le fait entrer, pour ne pas recharger au moindre
   // déplacement. Les écrans décochés ne sont jamais chargés.
   const liveRef = useRef<Set<string>>(new Set());
+  // Taille du canevas : inconnue au premier rendu (avant le montage), puis suivie (fenêtre, panneaux).
+  // Sans elle, une vue mémorisée qui ne bouge pas ne monterait jamais aucun écran.
+  const [viewportSize, setViewportSize] = useState({ width: 0, height: 0 });
+  useEffect(() => {
+    const el = viewport.current;
+    if (!el) return;
+    const measure = () => {
+      const { width, height } = el.getBoundingClientRect();
+      setViewportSize((s) => (s.width === width && s.height === height ? s : { width, height }));
+    };
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
   const live = useMemo(() => {
-    const rect = viewport.current?.getBoundingClientRect();
-    const width = rect?.width ?? 0;
-    const height = rect?.height ?? 0;
+    const { width, height } = viewportSize;
     const cx = (width / 2 - view.x) / view.zoom;
     const cy = (height / 2 - view.y) / view.zoom;
     const area = (margin: number) => ({
@@ -219,7 +232,7 @@ export function Canvas(props: Props) {
     const next = new Set(candidates.sort((a, b) => a.distance - b.distance).slice(0, MAX_LIVE).map((c) => c.id));
     liveRef.current = next;
     return next;
-  }, [stories, positionOf, view, device, activeStory]);
+  }, [stories, positionOf, view, viewportSize, device, activeStory]);
 
   // Compteur : écrans montés pas encore affichés.
   const pending = [...live].filter((id) => !loaded[id]).length;

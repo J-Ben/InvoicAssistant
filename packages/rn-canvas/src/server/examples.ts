@@ -25,7 +25,6 @@ type Value =
   | { kind: 'new'; name: string; args: Value[] };
 
 const MAX_DEPTH = 4;
-const VISIBLE = /^(visible|open|isOpen|isVisible|show|opened|presented)$/;
 
 /**
  * Exemples des composants de `components` (fichier → noms exportés), ou null si le projet n'a pas
@@ -60,7 +59,7 @@ export function generateExamples(root: string, components: { file: string; name:
     for (const prop of checker.getPropertiesOfType(propsType)) {
       const optional = (prop.flags & ts.SymbolFlags.Optional) !== 0;
       const type = checker.getTypeOfSymbolAtLocation(prop, param);
-      if (optional && !(VISIBLE.test(prop.name) && isBoolean(ts, type))) continue;
+      if (optional) continue;
       if (prop.name === 'children' || prop.name === 'style' || prop.name.endsWith('Style')) continue;
       const value = valueOf(type, prop.name, 0, 0, new Set());
       if (value) props.push([prop.name, value]);
@@ -168,11 +167,6 @@ function componentFunction(ts: typeof TS, source: TS.SourceFile, name: string): 
   return found;
 }
 
-function isBoolean(ts: typeof TS, type: TS.Type): boolean {
-  if (type.flags & ts.TypeFlags.BooleanLike) return true;
-  return type.isUnion() && type.types.every((t) => t.flags & (ts.TypeFlags.BooleanLiteral | ts.TypeFlags.Undefined | ts.TypeFlags.Null));
-}
-
 function singular(name: string): string {
   return name.replace(/ies$/, 'y').replace(/s$/, '');
 }
@@ -225,8 +219,12 @@ function numberFor(name: string, n: number, today: Date): number {
   return n + 1;
 }
 
-function booleanFor(name: string): boolean {
-  return VISIBLE.test(name);
+/**
+ * Un exemple sert partout (aperçus, écrans, insertion) : une modale n'y est jamais ouverte
+ * (`visible: false`). Les écrans « Ouvrir en grand » l'ouvrent eux-mêmes.
+ */
+function booleanFor(_name: string): boolean {
+  return false;
 }
 
 /** Pour une union de chaînes : une valeur parlante si le nom s'y prête (icônes), sinon dans l'ordre. */

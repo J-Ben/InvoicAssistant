@@ -76,6 +76,7 @@ export const AvecDonnees: CanvasStory = {
 | `setup` | Exécuté avant le premier rendu, pour remplir un store par exemple. Peut retourner une fonction de nettoyage. |
 | `parameters` | Données libres transmises au wrapper, comme les paramètres de route |
 | `wrapper` | Fournisseurs propres à la variante, à l'intérieur de ceux de `rn-canvas.config.tsx` : ils peuvent utiliser les hooks de l'app |
+| `title` | Nom affiché de la variante (par défaut, tiré du nom de l'export : `SansParams` → « Sans Params ») |
 | `storage` | Stockage du navigateur (localStorage, donc AsyncStorage sur le web) restauré avant le rendu. Écrit par l'éditeur avec « ＋ » |
 | `params` | Paramètres de route, dans la variante ou l'export par défaut : `{ id: '42' }`. Lus par `useLocalSearchParams()` (expo-router) ou `route.params` / `useRoute()` (React Navigation) |
 
@@ -127,7 +128,7 @@ Ouvrez **http://localhost:7007**.
 - **Structure** : boutons Dupliquer et Supprimer de l'inspecteur, ou raccourcis ⌘/Ctrl+D et Suppr. **Glissez un élément directement sur l'écran** (ou dans l'onglet Calques) pour le déplacer : en haut de la cible pour le placer avant, en bas pour après, au milieu pour le mettre dedans. Un repère vert montre l'emplacement, rouge si le déplacement est impossible (autre fichier, dans lui-même).
 - **Composants** : l'onglet liste les composants exportés par le projet et quelques primitives React Native. Un clic insère le composant dans l'élément sélectionné (s'il s'agit d'un conteneur) ou juste après ; on peut aussi le **glisser sur l'écran** ou vers les calques. L'import est ajouté, et les props obligatoires (lues dans l'interface `NomProps`) reçoivent des valeurs d'exemple.
 - **Thème de l'éditeur** : le bouton Système / Clair / Sombre de la barre du haut. Le choix est mémorisé dans le navigateur.
-- **Flux** (projets expo-router) : le bouton ⇢ Flux dessine les liens de navigation lus dans le code (`router.push/replace/navigate`, `<Link href>`), du bouton exact vers l'écran visé. Survolez un écran pour mettre ses liens en avant. La légende compte les liens vers des écrans absents du canevas et les boutons non affichés dans l'état actuel (liste vide…). Une cible calculée (`router.push(route)`) n'est pas lisible dans le code et n'apparaît pas.
+- **Flux** (projets expo-router) : le bouton ⇢ Flux dessine les liens de navigation lus dans le code (`router.push/replace/navigate`, `<Link href>`), du bouton exact vers l'écran visé. Survolez un écran pour mettre ses liens en avant. La légende compte les liens vers des écrans absents du canevas et les boutons non affichés dans l'état actuel (liste vide…). Une cible calculée (`router.push(route)`) n'est pas lisible dans le code et n'apparaît pas. Un écran pas encore chargé (hors de la vue) a ses liens dessinés depuis le haut de son cadre, en pointillés, jusqu'à ce que la position de ses boutons soit connue.
 - **Pages et parcours** : les onglets en haut à gauche du canevas. La **vue d'ensemble** montre tous les écrans ; **＋ Parcours** crée une page qui n'en reprend qu'une sélection (cochez-les dans l'onglet Écrans), avec sa propre disposition, ses groupes et ses notes : ranger un parcours ne change jamais la vue d'ensemble. Double-clic sur un onglet pour le renommer.
 - **Groupes** (▢ Groupe) : un cadre de couleur titré, autour de l'écran actif ou au centre de la vue. Les écrans et notes dont le centre est dedans en font partie : glisser le titre déplace le groupe avec son contenu, le coin le redimensionne. Double-clic sur le titre pour le renommer ; boutons pour la couleur, la suppression (les écrans restent) et « ⇢ Parcours », qui crée un parcours avec les écrans du groupe.
 - **Notes** (✎ Note) : un bloc de texte libre. Double-clic pour l'écrire, glisser pour la déplacer, bord droit pour l'élargir.
@@ -209,7 +210,7 @@ Si l'éditeur est ouvert en même temps, il affiche les modifications de l'IA en
 
 `isolateStories` (activé par défaut si l'app tourne sur `localhost`) : chaque écran est servi depuis son propre sous-domaine (`accueil-actuel-1k2j.localhost:8081`), que les navigateurs résolvent vers la machine locale. Chaque écran a ainsi son propre stockage (localStorage, IndexedDB, OPFS) : pas de conflit entre écrans affichés en parallèle, ce qui est indispensable pour expo-sqlite sur le web, dont la base ne s'ouvre que dans un seul onglet à la fois.
 
-**Beaucoup d'écrans.** Chaque écran charge toute l'app dans son cadre. Seuls les écrans cochés, dans la vue ou juste autour, sont chargés (12 au plus, 4 à la fois, les plus proches du centre d'abord) ; un écran qui sort largement de la vue est déchargé, et rechargé en y revenant (son état d'interaction repart de sa variante, son stockage est gardé). Les panneaux latéraux se masquent par les boutons ‹ › à leur bord, ou ⌘\ pour les deux.
+**Beaucoup d'écrans.** Chaque écran charge toute l'app dans son cadre. Seuls les écrans cochés, dans la vue ou juste autour, sont chargés (12 au plus, 4 à la fois, les plus proches du centre d'abord) ; un écran qui sort largement de la vue est déchargé, et rechargé en y revenant (son état d'interaction repart de sa variante, son stockage est gardé). Le bundle de l'app est le même pour tous les écrans : demandé depuis le sous-domaine d'un écran, il est redirigé vers l'hôte principal (`localhost:8081`) et servi avec un ETag (`RN_CANVAS=1` seulement). Il n'est téléchargé et compilé qu'une fois, puis revalidé (304) tant que le code ne change pas ; la page, donc le stockage, reste celle du sous-domaine, et Fast Refresh fonctionne comme avant. Les panneaux latéraux se masquent par les boutons ‹ › à leur bord, ou ⌘\ pour les deux.
 
 ## Fonctionnement
 
@@ -225,6 +226,8 @@ Le serveur n'écoute que sur `127.0.0.1` et refuse les requêtes d'autres origin
 ## Limites actuelles
 
 - Les valeurs dynamiques (`{user.name}`, styles calculés) s'affichent en lecture seule.
+- Avec expo-router en sortie `server` ou `static`, la page d'un écran arrive rendue côté serveur (l'app), puis le canevas la remplace : React signale une erreur d'hydratation dans la console, sans effet sur l'écran.
+- Les données d'exemple générées ne mettent jamais une modale ouverte (`visible: false`) ; les écrans « Ouvrir en grand » l'ouvrent eux-mêmes.
 - Un écran est affiché sans ses layouts (barre d'onglets, en-tête de pile) : ajoutez-les au besoin par un `wrapper` dans le fichier canvas.
 - Les modifications de structure ne concernent que les enfants directs d'un élément JSX. Un élément affiché sous condition (`{cond && <X />}`), dans une liste (`.map`) ou à la racine d'un composant se modifie dans le code.
 - Les déplacements se font dans un même fichier. Pour sortir un élément d'un composant, il faut passer par le code.

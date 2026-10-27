@@ -167,12 +167,12 @@ export class Project {
       const fallbackTitle = path.basename(file).replace(CANVAS_FILE, '');
       try {
         const { ast } = parse(fs.readFileSync(this.resolve(file), 'utf8'), file);
-        const { title, exports } = storyExports(ast);
+        const { title, exports, titles } = storyExports(ast);
         const groupTitle = title ?? fallbackTitle;
         return {
           file,
           title: groupTitle,
-          stories: exports.map((exportName) => ({ id: `${file}#${exportName}`, file, exportName, title: humanize(exportName) })),
+          stories: exports.map((exportName) => ({ id: `${file}#${exportName}`, file, exportName, title: titles[exportName] ?? humanize(exportName) })),
         };
       } catch (error) {
         return { file, title: `${fallbackTitle} (erreur : ${(error as Error).message})`, stories: [] };
@@ -822,15 +822,23 @@ function readJson(file: string): unknown {
 }
 
 /** Exports nommés d'un fichier canvas (= stories) et titre éventuel de l'export par défaut. */
-export function storyExports(ast: AstNode): { title: string | null; exports: string[] } {
+export function storyExports(ast: AstNode): { title: string | null; exports: string[]; titles: Record<string, string> } {
   const exports: string[] = [];
+  // Titre d'une variante (`export const Cree = { title: 'Créé', … }`), sinon dérivé de son nom.
+  const titles: Record<string, string> = {};
   let title: string | null = null;
   for (const stmt of programOf(ast).body) {
     if (stmt.type === 'ExportNamedDeclaration') {
       if (stmt.exportKind === 'type') continue;
       const decl = stmt.declaration;
       if (decl?.type === 'VariableDeclaration') {
-        for (const d of decl.declarations) if (d.id.type === 'Identifier') exports.push(d.id.name);
+        for (const d of decl.declarations) {
+          if (d.id.type !== 'Identifier') continue;
+          exports.push(d.id.name);
+          const init = d.init && unwrap(d.init);
+          const titleProp = init?.type === 'ObjectExpression' ? findProperty(init, 'title') : undefined;
+          if (titleProp && unwrap(titleProp.value).type === 'StringLiteral') titles[d.id.name] = unwrap(titleProp.value).value;
+        }
       } else if (decl?.type === 'FunctionDeclaration' && decl.id) {
         exports.push(decl.id.name);
       }
@@ -844,7 +852,7 @@ export function storyExports(ast: AstNode): { title: string | null; exports: str
       if (titleProp && unwrap(titleProp.value).type === 'StringLiteral') title = unwrap(titleProp.value).value;
     }
   }
-  return { title, exports };
+  return { title, exports, titles };
 }
 
 function flattenTokens(src: SourceFile, object: AstNode, prefix: string, out: ThemeToken[]): void {

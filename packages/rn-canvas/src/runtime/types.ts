@@ -7,6 +7,8 @@ export interface CanvasWrapperProps {
 
 /** Une variante d'écran affichée sur le canevas. */
 export interface CanvasStoryObject<P = Record<string, unknown>> {
+  /** Nom affiché de la variante (par défaut, tiré du nom de l'export : `SansParams` → « Sans Params »). */
+  title?: string;
   /** Props passées au `component` déclaré dans l'export par défaut. */
   props?: Partial<P>;
   /** Rendu personnalisé (prioritaire sur `component`). */

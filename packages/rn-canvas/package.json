@@ -1,6 +1,6 @@
 {
   "name": "rn-canvas",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "description": "Éditeur visuel aller-retour pour React Native : vos écrans sur un canevas, vos modifications écrites dans votre code.",
   "license": "MIT",
   "type": "module",

@@ -12,6 +12,7 @@
  */
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 
 const SHIMS_DIR = path.join(__dirname, 'shims');
 
@@ -101,6 +102,7 @@ function withRnCanvas(config, options = {}) {
         res.end(JSON.stringify({ shims: enabled, modules: Object.keys(shims) }));
         return;
       }
+      if (enabled && shareStoryBundle(req, res)) return;
       next(req, res, done);
     };
   };
@@ -108,4 +110,84 @@ function withRnCanvas(config, options = {}) {
   return config;
 }
 
-module.exports = { withRnCanvas, shimsFor, BUILTIN_SHIMS };
+/**
+ * Écrans du canevas : chacun est servi depuis son sous-domaine (`ecran-1k2j.localhost:8081`, stockage
+ * isolé) et chargerait sa propre copie du bundle de développement, servi sans cache (plusieurs dizaines
+ * de Mo, recompilés à chaque fois). Le bundle demandé depuis un sous-domaine est redirigé vers l'hôte
+ * principal (`localhost:8081`) : une seule URL pour tous les écrans. Il y est servi avec un ETag : le
+ * navigateur le revalide (304 tant que le code n'a pas changé) et réutilise sa compilation. Seul
+ * l'emplacement du script change : la page, donc le stockage, reste celle du sous-domaine. Rien ne
+ * change pour l'app ouverte normalement (`localhost:8081`).
+ */
+function shareStoryBundle(req, res) {
+  const url = req.url || '';
+  if (!/\.bundle(\?|$)/.test(url) || !/[?&]platform=web\b/.test(url) || req.method !== 'GET') return false;
+  const host = String(req.headers.host || '');
+  const main = host.replace(/^[^:]+\.(localhost(:\d+)?)$/, '$1');
+  // Seul le script principal (balise <script>) est redirigé : les morceaux chargés à la demande
+  // (expo-router) passent par fetch, dont la requête préalable CORS ne suit pas une redirection.
+  if (main !== host && req.headers['sec-fetch-dest'] === 'script') {
+    res.statusCode = 302;
+    res.setHeader('Location', `http://${main}${url}`);
+    res.setHeader('Cache-Control', 'no-cache');
+    res.end();
+    return true;
+  }
+  if (main !== host) return false;
+  // Les morceaux chargés à la demande (expo-router) passent par fetch : après la redirection depuis le
+  // sous-domaine, leur origine vaut « null » ; on la renvoie telle quelle.
+  res.setHeader('Access-Control-Allow-Origin', req.headers.origin || '*');
+  res.setHeader('Vary', 'Origin');
+  const ifNoneMatch = req.headers['if-none-match'];
+  holdBody(res, (body) => {
+    const etag = `"rnc-${crypto.createHash('sha1').update(body).digest('hex')}"`;
+    res.setHeader('ETag', etag);
+    res.setHeader('Cache-Control', 'no-cache');
+    res.removeHeader('Pragma');
+    res.removeHeader('Expires');
+    res.removeHeader('Surrogate-Control');
+    return ifNoneMatch === etag;
+  });
+  return false;
+}
+
+/**
+ * Retient la réponse de Metro jusqu'à son dernier octet : `notModified` (appelé avec le corps, pour
+ * poser ses en-têtes) peut alors répondre 304 à la place. Seules les réponses 200 sont touchées.
+ */
+function holdBody(res, notModified) {
+  const chunks = [];
+  const write = res.write;
+  const end = res.end;
+  const writeHead = res.writeHead;
+  let head = null;
+  res.writeHead = function (...args) {
+    head = args;
+    return this;
+  };
+  res.write = function (chunk, encoding) {
+    if (chunk) chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk, typeof encoding === 'string' ? encoding : 'utf8'));
+    return true;
+  };
+  res.end = function (chunk, encoding) {
+    if (chunk && typeof chunk !== 'function') res.write(chunk, encoding);
+    res.write = write;
+    res.end = end;
+    res.writeHead = writeHead;
+    if (head) {
+      res.statusCode = head[0];
+      const headers = head.find((h) => h && typeof h === 'object');
+      if (headers) for (const [k, v] of Object.entries(headers)) res.setHeader(k, v);
+    }
+    const body = Buffer.concat(chunks);
+    if (res.statusCode === 200 && notModified(body)) {
+      res.statusCode = 304;
+      res.removeHeader('Content-Length');
+      res.removeHeader('Content-Type');
+      return end.call(res);
+    }
+    return end.call(res, body);
+  };
+}
+
+module.exports = { withRnCanvas, shimsFor, BUILTIN_SHIMS, shareStoryBundle };
