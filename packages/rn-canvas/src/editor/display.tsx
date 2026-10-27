@@ -10,11 +10,23 @@ export interface Display {
   pagesBar: boolean;
   boardTools: boolean;
   storyLabels: boolean;
+  /** Écrans gardés chargés hors de la vue (0 : tous) ; au-delà, les moins récemment vus sont libérés. */
+  keepLoaded: number;
+  /**
+   * Tous les écrans cochés se chargent (4 à la fois, les plus proches de la vue d'abord) et restent
+   * chargés. Désactivé : seuls les écrans autour de la vue se chargent (gros projets).
+   */
+  loadAll: boolean;
 }
 
-const DEFAULTS: Display = { leftPanel: true, rightPanel: true, libraryBar: true, palette: true, handles: true, pagesBar: true, boardTools: true, storyLabels: true };
+type Toggle = Exclude<keyof Display, 'keepLoaded'>;
 
-const LABELS: [keyof Display, string, string?][] = [
+/** Choix proposés : chaque écran chargé garde une copie de l'app en mémoire. */
+const KEEP_CHOICES = [12, 24, 48, 0];
+
+const DEFAULTS: Display = { leftPanel: true, rightPanel: true, libraryBar: true, palette: true, handles: true, pagesBar: true, boardTools: true, storyLabels: true, keepLoaded: 24, loadAll: true };
+
+const LABELS: [Toggle, string, string?][] = [
   ['leftPanel', 'Panneau de gauche', 'Écrans, calques, composants, thème'],
   ['rightPanel', 'Inspecteur (droite)'],
   ['palette', 'Palette à côté de la sélection'],
@@ -23,11 +35,14 @@ const LABELS: [keyof Display, string, string?][] = [
   ['pagesBar', 'Pages et parcours'],
   ['boardTools', 'Outils Groupe / Note'],
   ['storyLabels', 'Noms des écrans'],
+  ['loadAll', 'Charger tous les écrans', 'Sinon, seulement ceux autour de la vue : pour les projets à très nombreux écrans'],
 ];
 
 const KEY = 'rn-canvas:display';
 
-export function useDisplay(): [Display, (key: keyof Display, value: boolean) => void, () => void] {
+type SetDisplay = <K extends keyof Display>(key: K, value: Display[K]) => void;
+
+export function useDisplay(): [Display, SetDisplay, () => void] {
   const [display, setDisplay] = useState<Display>(() => {
     try {
       return { ...DEFAULTS, ...JSON.parse(localStorage.getItem(KEY) ?? '{}') };
@@ -46,7 +61,7 @@ export function useDisplay(): [Display, (key: keyof Display, value: boolean) => 
 }
 
 /** Bouton « Affichage » de la barre du haut : cases à cocher, fermeture au clic ailleurs ou Échap. */
-export function DisplayMenu({ display, onChange, onReset }: { display: Display; onChange: (key: keyof Display, value: boolean) => void; onReset: () => void }) {
+export function DisplayMenu({ display, onChange, onReset }: { display: Display; onChange: SetDisplay; onReset: () => void }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -78,6 +93,19 @@ export function DisplayMenu({ display, onChange, onReset }: { display: Display; 
               </span>
             </label>
           ))}
+          {!display.loadAll && <label className="display-option display-keep">
+            <span>
+              Écrans gardés chargés
+              <span className="muted small"> — revenir sur un écran déjà chargé ne le recharge pas</span>
+            </span>
+            <select value={display.keepLoaded} onChange={(e) => onChange('keepLoaded', Number(e.target.value))}>
+              {KEEP_CHOICES.map((n) => (
+                <option key={n} value={n}>
+                  {n === 0 ? 'Tous' : n}
+                </option>
+              ))}
+            </select>
+          </label>}
           <button className="link-button" onClick={onReset}>
             Tout réafficher
           </button>

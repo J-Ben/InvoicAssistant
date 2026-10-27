@@ -738,6 +738,8 @@ export function App() {
           onUnload={resetLoad}
           empty={stories.length === 0}
           onBackgroundClick={clearSelection}
+          keepLoaded={display.loadAll ? 0 : display.keepLoaded}
+          loadAll={display.loadAll}
           showBoardTools={display.boardTools}
           showLabels={display.storyLabels}
         >

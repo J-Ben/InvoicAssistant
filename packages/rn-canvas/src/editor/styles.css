@@ -415,3 +415,6 @@ textarea { resize: vertical; }
 
 /* Appels réseau coupés dans un écran : pastille discrète en bas du cadre. */
 .frame-network { position: absolute; left: 8px; bottom: 8px; z-index: 2; padding: 2px 8px; border-radius: 999px; background: var(--panel); border: 1px solid var(--border); color: var(--muted); font-size: 11px; pointer-events: auto; cursor: help; }
+
+.display-keep { align-items: center; justify-content: space-between; cursor: default; }
+.display-keep select { background: var(--input); border: 1px solid var(--border); border-radius: 6px; padding: 2px 4px; }

@@ -105,6 +105,10 @@ interface Props {
   frames: Map<string, HTMLIFrameElement>;
   onActivate: (id: string) => void;
   empty: boolean;
+  /** Écrans gardés chargés hors de la vue, au plus (0 : tous). Voir le menu Affichage. */
+  keepLoaded?: number;
+  /** Charger tous les écrans cochés, pas seulement ceux autour de la vue. */
+  loadAll?: boolean;
   /** Clic dans le vide du canevas (sans glisser). */
   onBackgroundClick?: () => void;
   /** Outils Groupe / Note et zoom (menu Affichage). */
@@ -138,11 +142,13 @@ const MAX_LIVE = 12;
 /** Marges autour de la vue, en fraction de sa taille : pour monter un écran, et pour le garder monté. */
 const ENTER_MARGIN = 0.25;
 const STAY_MARGIN = 1;
+/** Délai sans mouvement de la vue avant de charger les écrans qui y sont entrés. */
+const SETTLE_DELAY = 300;
 
 export function Canvas(props: Props) {
   const { appUrl, isolateStories, stories, allStories, device, activeStory, errors, loaded, generations, flows, frames, onActivate, onUnload, empty, reveal, children } = props;
   const { blocked = {} } = props;
-  const { page, onChangePage, onCreateParcours, flowMode, onFlowMode, isolate, onBackgroundClick, showBoardTools = true, showLabels = true } = props;
+  const { page, onChangePage, onCreateParcours, flowMode, onFlowMode, isolate, onBackgroundClick, keepLoaded = 24, loadAll = false, showBoardTools = true, showLabels = true } = props;
   const viewport = useRef<HTMLDivElement>(null);
   // Vue mémorisée par page : ni un rechargement ni l'ajout / le masquage d'un écran ne la réinitialisent.
   const [view, setView] = useState<View>(() => readView(page.id) ?? { x: PADDING, y: PADDING, zoom: 0.75 });
@@ -187,12 +193,13 @@ export function Canvas(props: Props) {
     [visible, gridIndex, gridOrigin, positions, columns, cellWidth, cellHeight],
   );
 
-  // Virtualisation : chaque écran est une iframe qui charge toute l'app (bundle de dev de plusieurs
-  // dizaines de Mo, servi sans cache). Seuls les écrans dans la vue ou juste autour restent montés, au
-  // plus MAX_LIVE, les plus proches du centre ; l'écran actif reste toujours monté. Un écran ne sort
-  // qu'au-delà d'une marge plus large que celle qui le fait entrer, pour ne pas recharger au moindre
-  // déplacement. Les écrans décochés ne sont jamais chargés.
+  // Chargement à la demande : chaque écran est une iframe qui exécute toute l'app. Un écran se charge
+  // quand il entre dans la vue (ou juste autour), au plus MAX_LIVE à la fois, les plus proches du centre
+  // d'abord ; l'écran actif est toujours chargé. Une fois chargé, il reste monté hors de la vue (y
+  // revenir est instantané), dans la limite de `keepLoaded` écrans : au-delà, les moins récemment vus
+  // sont libérés. Les écrans décochés ne sont jamais chargés.
   const liveRef = useRef<Set<string>>(new Set());
+  const lastSeen = useRef(new Map<string, number>());
   // Taille du canevas : inconnue au premier rendu (avant le montage), puis suivie (fenêtre, panneaux).
   // Sans elle, une vue mémorisée qui ne bouge pas ne monterait jamais aucun écran.
   const [viewportSize, setViewportSize] = useState({ width: 0, height: 0 });
@@ -208,7 +215,14 @@ export function Canvas(props: Props) {
     observer.observe(el);
     return () => observer.disconnect();
   }, []);
+  // Vue arrêtée depuis un instant : traverser une zone en glissant ne charge pas les écrans survolés.
+  const [settled, setSettled] = useState(view);
+  useEffect(() => {
+    const timer = window.setTimeout(() => setSettled(view), SETTLE_DELAY);
+    return () => window.clearTimeout(timer);
+  }, [view]);
   const live = useMemo(() => {
+    const view = settled;
     const { width, height } = viewportSize;
     const cx = (width / 2 - view.x) / view.zoom;
     const cy = (height / 2 - view.y) / view.zoom;
@@ -225,14 +239,24 @@ export function Canvas(props: Props) {
     for (const s of stories) {
       const p = positionOf(s.id);
       if (!p) continue;
-      if (s.id === activeStory || overlaps(p, enter) || (liveRef.current.has(s.id) && overlaps(p, stay))) {
+      if (loadAll || s.id === activeStory || overlaps(p, enter) || (liveRef.current.has(s.id) && overlaps(p, stay))) {
         candidates.push({ id: s.id, distance: s.id === activeStory ? -1 : Math.hypot(p.x + device.width / 2 - cx, p.y + device.height / 2 - cy) });
       }
     }
-    const next = new Set(candidates.sort((a, b) => a.distance - b.distance).slice(0, MAX_LIVE).map((c) => c.id));
+    const near = candidates.sort((a, b) => a.distance - b.distance).slice(0, loadAll ? undefined : MAX_LIVE).map((c) => c.id);
+    const now = Date.now();
+    for (const id of near) lastSeen.current.set(id, now);
+    // Un écran déjà chargé reste monté hors de la vue : y revenir ne le recharge pas. Au-delà de
+    // `keepLoaded` écrans montés, les moins récemment vus sont libérés (0 : aucune limite).
+    const nearSet = new Set(near);
+    const kept = [...liveRef.current]
+      .filter((id) => !nearSet.has(id) && visible.has(id) && loaded[id])
+      .sort((a, b) => (lastSeen.current.get(b) ?? 0) - (lastSeen.current.get(a) ?? 0));
+    const room = keepLoaded > 0 ? Math.max(0, keepLoaded - near.length) : kept.length;
+    const next = new Set([...near, ...kept.slice(0, room)]);
     liveRef.current = next;
     return next;
-  }, [stories, positionOf, view, viewportSize, device, activeStory]);
+  }, [stories, positionOf, settled, viewportSize, device, activeStory, loaded, visible, keepLoaded, loadAll]);
 
   // Compteur : écrans montés pas encore affichés.
   const pending = [...live].filter((id) => !loaded[id]).length;
@@ -703,7 +727,7 @@ export const Default = { props: {} };`}</pre>
       {pending > 0 && (
         <div className="canvas-progress" role="status">
           <span className="spinner" />
-          Chargement des écrans de la vue · {live.size - pending}/{live.size}
+          Chargement des écrans{loadAll ? '' : ' de la vue'} · {live.size - pending}/{live.size}
         </div>
       )}
       {flowLayout && flowView && <FlowLegend layout={flowLayout} view={flowView} mode={page.groups.length ? flowMode : 'all'} onMode={onFlowMode} hasGroups={page.groups.length > 0} parcours={page.stories !== null} />}

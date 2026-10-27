@@ -674,13 +674,21 @@ export function startInspector(storyId: string): InspectorHandle {
 
   // Rendu modifié (Fast Refresh, état, défilement) : on met à jour calques et surbrillances.
   let frame = 0;
+  let fallback = 0;
+  const update = () => {
+    cancelAnimationFrame(frame);
+    window.clearTimeout(fallback);
+    sendTree();
+    if (pending) select(pending.loc, pending.name);
+    draw();
+  };
+  // Un écran hors de la vue n'a plus d'images (le navigateur suspend requestAnimationFrame dans un
+  // cadre invisible) : le minuteur prend le relais, sinon l'éditeur ne le saurait jamais affiché.
   const refresh = () => {
     cancelAnimationFrame(frame);
-    frame = requestAnimationFrame(() => {
-      sendTree();
-      if (pending) select(pending.loc, pending.name);
-      draw();
-    });
+    window.clearTimeout(fallback);
+    frame = requestAnimationFrame(update);
+    fallback = window.setTimeout(update, 250);
   };
   const observer = new MutationObserver((mutations) => {
     if (mutations.every((m) => overlay.contains(m.target))) return;
@@ -699,6 +707,7 @@ export function startInspector(storyId: string): InspectorHandle {
     stop() {
       observer.disconnect();
       cancelAnimationFrame(frame);
+      window.clearTimeout(fallback);
       window.clearInterval(poll);
       for (const type of BLOCKED) window.removeEventListener(type, block, true);
       window.removeEventListener('mousemove', onMove, true);
