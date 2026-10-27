@@ -394,3 +394,24 @@ textarea { resize: vertical; }
 .board-tools[hidden] { display: none !important; }
 .artboard-label.hidden-label { opacity: 0; }
 .artboard:hover .artboard-label.hidden-label { opacity: 1; }
+
+/* Boutons au bord des panneaux latéraux : masquer / rouvrir sans passer par le menu Affichage. */
+.panel-toggle { position: fixed; top: 50%; z-index: 20; width: 16px; height: 48px; margin-top: -24px; padding: 0; border: 1px solid var(--border); background: var(--panel); color: var(--muted); font-size: 13px; line-height: 1; cursor: pointer; }
+.panel-toggle:hover { color: var(--text); }
+.panel-toggle.left { left: 260px; border-left: 0; border-radius: 0 6px 6px 0; }
+.panel-toggle.left.closed { left: 0; }
+.panel-toggle.right { right: 320px; border-right: 0; border-radius: 6px 0 0 6px; }
+.panel-toggle.right.closed { right: 0; }
+
+/* Le toast passe au-dessus de la barre des composants au lieu de la recouvrir. */
+.toast { z-index: 30; }
+.toast.above-library { bottom: 68px; }
+
+/* Boutons d'un groupe visibles sans survol (estompés), pour qu'on trouve « Dégrouper ». */
+.board-group-head button { opacity: 0.55; }
+
+/* Écran déchargé (hors de la vue) : simple cadre, sans indicateur de chargement. */
+.frame-asleep { font-size: 13px; opacity: 0.7; }
+
+/* Appels réseau coupés dans un écran : pastille discrète en bas du cadre. */
+.frame-network { position: absolute; left: 8px; bottom: 8px; z-index: 2; padding: 2px 8px; border-radius: 999px; background: var(--panel); border: 1px solid var(--border); color: var(--muted); font-size: 11px; pointer-events: auto; cursor: help; }

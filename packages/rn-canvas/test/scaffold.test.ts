@@ -69,8 +69,10 @@ export default function RootLayout() {
   assert.ok(!code.includes('StatusBar') && !code.includes('Splash') && !code.includes('Stack'), code);
   // La condition propre à l'app (session prête) n'est pas reprise : elle masquerait les écrans.
   assert.ok(!code.includes('if (!session.ready)'), code);
-  assert.equal(proposal.todo.length, 1);
-  assert.match(proposal.todo[0], /session\.ready/);
+  // Composant local qui enveloppe la navigation : non repris, mais signalé.
+  assert.equal(proposal.todo.length, 2);
+  assert.match(proposal.todo[0], /<Inner> écarté : composant local/);
+  assert.match(proposal.todo[1], /session\.ready/);
 });
 
 test('fournisseurs : App.tsx sans expo-router, arrêt sur NavigationContainer', () => {

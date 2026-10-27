@@ -8,7 +8,7 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
-import { type AstNode, memberPath, parse, programOf, propertyKey, unwrap, walk } from './ast.ts';
+import { type AstNode, findProperty, memberPath, parse, programOf, propertyKey, unwrap, walk } from './ast.ts';
 import { resolveRelative } from './setup.ts';
 
 export interface NavigationScreen {
@@ -30,18 +30,40 @@ interface Declared {
   exportName: string;
 }
 
+export interface NavigationReading {
+  screens: NavigationScreen[];
+  /** Écrans dont le nom n'est connu qu'à l'exécution (`name={key}` dans un `.map`) : `fichier:ligne`. */
+  skipped: string[];
+  /** Piles imbriquées, lues comme navigateurs et pas comme écrans : `Route (fichier)`. */
+  navigators: string[];
+}
+
 type ParamTypes = Map<string, { name: string; optional: boolean; type: string }[] | null>;
 
-export function navigationScreens(root: string, files: string[]): NavigationScreen[] {
+export function navigationScreens(root: string, files: string[]): NavigationReading {
   const declared: Declared[] = [];
+  const skipped: string[] = [];
+  const navigators = new Set<string>();
   const paramTypes: ParamTypes = new Map();
   for (const file of files) {
     const program = programAt(root, file);
     if (!program) continue;
     collectParamLists(program, paramTypes);
-    for (const { route, component } of screenDeclarations(program)) {
-      const target = componentSource(root, file, program, component);
-      if (target) declared.push({ route, ...target });
+    for (const d of screenDeclarations(program)) {
+      const route = d.route ?? staticString(root, file, program, d.nameNode!);
+      if (!route) {
+        skipped.push(`${file}:${d.line ?? '?'}`);
+        continue;
+      }
+      const target = componentSource(root, file, program, d.component);
+      if (!target) continue;
+      // Une pile imbriquée (le composant déclare son propre <X.Navigator>) n'est pas un écran :
+      // ses écrans sont lus dans son fichier, qui fait partie des fichiers parcourus.
+      if (isNavigatorFile(root, target.file)) {
+        navigators.add(`${route} (${target.file})`);
+        continue;
+      }
+      declared.push({ route, ...target });
     }
   }
   const seen = new Set<string>();
@@ -62,7 +84,90 @@ export function navigationScreens(root: string, files: string[]): NavigationScre
     }
     out.push({ ...d, params, optional });
   }
-  return out;
+  return { screens: out, skipped, navigators: [...navigators] };
+}
+
+/**
+ * Le fichier déclare un navigateur (`<Stack.Navigator>` ou `createXNavigator({ screens })`), ou n'est
+ * qu'un aiguillage vers des navigateurs (`flag ? <NewStack /> : <LegacyStack />`).
+ */
+function isNavigatorFile(root: string, file: string, depth = 0): boolean {
+  const program = programAt(root, file);
+  if (!program) return false;
+  let found = false;
+  const rendered = new Set<string>();
+  walk(program, (n) => {
+    if (found) return false;
+    if (n.type === 'JSXOpeningElement' && n.name.type === 'JSXMemberExpression' && n.name.property.name === 'Navigator') found = true;
+    if (n.type === 'JSXOpeningElement' && n.name.type === 'JSXIdentifier') rendered.add(n.name.name);
+    if (n.type === 'CallExpression' && /^create\w*Navigator$/.test(memberPath(n.callee)?.split('.').pop() ?? '') && n.arguments[0]?.type === 'ObjectExpression' && findProperty(n.arguments[0], 'screens')) found = true;
+  });
+  if (found || depth >= 2 || rendered.size === 0) return found;
+  // Aiguillage : tout ce que le fichier rend est un composant importé qui est lui-même un navigateur.
+  return [...rendered].every((name) => {
+    const target = componentSource(root, file, program, { type: 'Identifier', name } as unknown as AstNode);
+    return Boolean(target) && target!.file !== file && isNavigatorFile(root, target!.file, depth + 1);
+  });
+}
+
+/**
+ * Valeur d'une expression connue à la lecture du code : chaîne, gabarit sans variable, ou chemin
+ * dans un objet constant (`SCREENS.ORDERS.DETAIL`), déclaré dans le fichier ou importé.
+ */
+function staticString(root: string, file: string, program: AstNode, node: AstNode): string | null {
+  const expr = unwrap(node);
+  if (expr.type === 'StringLiteral') return expr.value;
+  if (expr.type === 'TemplateLiteral' && expr.expressions.length === 0) return expr.quasis[0].value.cooked;
+  const member = memberPath(expr);
+  if (!member || !member.includes('.')) return null;
+  const [name, ...keys] = member.split('.');
+  let value = constValue(root, file, program, name, 0);
+  for (const key of keys) value = value && typeof value === 'object' ? (value as Record<string, unknown>)[key] : undefined;
+  return typeof value === 'string' ? value : null;
+}
+
+/** Valeur d'une constante du module (`const X = {…}`), ou importée (en suivant les réexports). */
+function constValue(root: string, file: string, program: AstNode, name: string, depth: number): unknown {
+  if (depth > 4) return undefined;
+  for (const stmt of program.body) {
+    const decl = stmt.type === 'ExportNamedDeclaration' ? stmt.declaration : stmt;
+    if (decl?.type !== 'VariableDeclaration' || decl.kind !== 'const') continue;
+    for (const v of decl.declarations) if (v.id.type === 'Identifier' && v.id.name === name && v.init) return literalValue(v.init);
+  }
+  for (const stmt of program.body) {
+    if (stmt.type !== 'ImportDeclaration' || stmt.importKind === 'type') continue;
+    const spec = stmt.specifiers.find((sp: AstNode) => sp.local.name === name);
+    if (!spec || spec.type === 'ImportNamespaceSpecifier') continue;
+    const target = resolveRelative(root, file, stmt.source.value);
+    if (!target) return undefined;
+    const imported = spec.type === 'ImportDefaultSpecifier' ? 'default' : (spec.imported.name ?? spec.imported.value);
+    const found = followExport(root, target, imported, 0);
+    const next = programAt(root, found.file);
+    if (!next) return undefined;
+    if (found.exportName === 'default') {
+      const d = next.body.find((st: AstNode) => st.type === 'ExportDefaultDeclaration')?.declaration;
+      if (!d) return undefined;
+      return d.type === 'Identifier' ? constValue(root, found.file, next, d.name, depth + 1) : literalValue(d);
+    }
+    return constValue(root, found.file, next, found.exportName, depth + 1);
+  }
+  return undefined;
+}
+
+/** Objet, chaîne ou nombre écrit en dur (`as const` compris) ; le reste vaut undefined. */
+function literalValue(node: AstNode): unknown {
+  const n = unwrap(node);
+  if (n.type === 'StringLiteral' || n.type === 'NumericLiteral' || n.type === 'BooleanLiteral') return n.value;
+  if (n.type === 'TemplateLiteral' && n.expressions.length === 0) return n.quasis[0].value.cooked;
+  if (n.type === 'ObjectExpression') {
+    const out: Record<string, unknown> = {};
+    for (const p of n.properties) {
+      const key = propertyKey(p);
+      if (key !== null) out[key] = literalValue(p.value);
+    }
+    return out;
+  }
+  return undefined;
 }
 
 function programAt(root: string, file: string): AstNode | null {
@@ -74,15 +179,23 @@ function programAt(root: string, file: string): AstNode | null {
 }
 
 /** `<X.Screen name="…" component={…} />`, `getComponent`, et `screens: { Nom: Composant }`. */
-function screenDeclarations(program: AstNode): { route: string; component: AstNode }[] {
-  const out: { route: string; component: AstNode }[] = [];
+interface ScreenDeclaration {
+  /** Nom écrit en clair, sinon null : il est alors calculé depuis `nameNode` (constante…). */
+  route: string | null;
+  nameNode?: AstNode;
+  component: AstNode;
+  line?: number;
+}
+
+function screenDeclarations(program: AstNode): ScreenDeclaration[] {
+  const out: ScreenDeclaration[] = [];
   walk(program, (n) => {
     if (n.type === 'JSXOpeningElement' && n.name.type === 'JSXMemberExpression' && n.name.property.name === 'Screen') {
       const attr = (key: string) => n.attributes.find((a: AstNode) => a.type === 'JSXAttribute' && a.name.name === key);
       const name = attr('name')?.value;
-      const route = name?.type === 'StringLiteral' ? name.value : name?.expression?.type === 'StringLiteral' ? name.expression.value : null;
+      const nameNode = name?.type === 'JSXExpressionContainer' ? name.expression : name;
       const component = attr('component')?.value?.expression ?? getComponent(attr('getComponent')?.value?.expression);
-      if (route && component) out.push({ route, component });
+      if (nameNode && component) out.push({ route: null, nameNode, component, line: n.loc?.start.line });
     }
     // API statique (v7) : createXNavigator({ screens: { Detail: DetailScreen, Edit: { screen: EditScreen } } })
     if (n.type === 'CallExpression' && /^create\w*Navigator$/.test(memberPath(n.callee)?.split('.').pop() ?? '') && n.arguments[0]?.type === 'ObjectExpression') {

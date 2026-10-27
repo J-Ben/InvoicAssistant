@@ -10,6 +10,7 @@ import { setProp, setStyle, setText, setToken, themeObject } from './edit.ts';
 import { examplesFile, generateExamples, writeIfChanged } from './examples.ts';
 import { matchRoute, navigationLinks, relativeImports, resolveImport, routesOf } from './flows.ts';
 import { navigationScreens } from './navigators.ts';
+import { stripJsonComments } from './setup.ts';
 import { SourceError, findElement, inspectElement, locOfIndex, meaningfulChildren, normalizeJsxText, sourceValue } from './inspect.ts';
 import { PRIMITIVES, componentsOf } from './library.ts';
 import { type Insertion, componentJsx, duplicateElement, ensureImport, finalOffset, insertion, moveElement, removeElement } from './structure.ts';
@@ -289,13 +290,17 @@ export default manifest;
       });
   }
 
+  /** Ce que la dernière lecture de la navigation n'a pas transformé en écran (voir `NavigationReading`). */
+  private navigationReport: { skipped: string[]; navigators: string[] } = { skipped: [], navigators: [] };
+
   /** Écrans déclarés à React Navigation (`<Stack.Screen name component>`) sans fichier canvas. */
   private missingNavigationScreens(): MissingRoute[] {
     const pkg = readJson(path.join(this.root, 'package.json')) as { dependencies?: Record<string, string> } | null;
     if (!pkg?.dependencies?.['@react-navigation/native']) return [];
     const dirs = [...new Set([...this.config.include, 'src', 'app'])].filter((d) => fs.existsSync(this.resolve(d)));
-    const files = this.sourceFiles((name) => /\.(tsx|jsx|ts|js)$/.test(name) && !CANVAS_FILE.test(name) && !/\.(test|spec|d|stories)\./.test(name), dirs);
-    const screens = navigationScreens(this.root, files);
+    const files = this.sourceFiles((name) => /\.(tsx|jsx|ts|js)$/.test(name) && !CANVAS_FILE.test(name) && !/\.d\./.test(name) && !NOT_APP_FILE.test(name), dirs);
+    const { screens, skipped, navigators } = navigationScreens(this.root, files);
+    this.navigationReport = { skipped, navigators };
     const covered = this.screensOfStories(screens.map((s) => s.file));
     return screens
       .filter((s) => !covered.has(s.file) && !this.config.ignoreRoutes.includes(s.file))
@@ -314,7 +319,7 @@ export default manifest;
    * Un fichier canvas par route sans écran (toutes, ou celles de `files`). Les routes à paramètre
    * (`[id]`) reçoivent une valeur d'exemple à remplacer. Rien n'est écrasé.
    */
-  generateRouteStories(files?: string[]): { created: string[] } {
+  generateRouteStories(files?: string[]): { created: string[]; skipped: string[]; navigators: string[] } {
     const dir = this.config.include.includes('canvas') ? 'canvas' : `${this.config.include[0] ?? 'src'}/canvas`;
     const created: string[] = [];
     for (const route of this.missingRoutes()) {
@@ -347,7 +352,7 @@ export const Actuel: CanvasStory = {};
       created.push(target);
     }
     if (created.length) this.writeManifest();
-    return { created };
+    return { created, skipped: this.navigationReport.skipped, navigators: this.navigationReport.navigators };
   }
 
   // ---- Flux (liens de navigation) ----
@@ -774,28 +779,7 @@ function detectRouterRoot(root: string): string | null {
   return ['app', 'src/app'].find((dir) => fs.existsSync(path.join(root, dir))) ?? null;
 }
 
-/** Retire les commentaires d'un JSON « à la tsconfig », sans toucher aux chaînes (`"@app/*"`). */
-export function stripJsonComments(text: string): string {
-  let out = '';
-  for (let i = 0; i < text.length; i++) {
-    const c = text[i];
-    if (c === '"') {
-      const start = i;
-      for (i++; i < text.length && text[i] !== '"'; i++) if (text[i] === '\\') i++;
-      out += text.slice(start, i + 1);
-    } else if (c === '/' && text[i + 1] === '/') {
-      while (i < text.length && text[i] !== '\n') i++;
-      out += '\n';
-    } else if (c === '/' && text[i + 1] === '*') {
-      i = text.indexOf('*/', i + 2);
-      if (i === -1) break;
-      i++;
-    } else {
-      out += c;
-    }
-  }
-  return out;
-}
+export { stripJsonComments };
 
 /**
  * React Navigation sans expo-router : chaque écran est affiché dans un navigateur à un seul écran
@@ -815,7 +799,8 @@ export interface MissingRoute {
 
 /** `invoice-detail` / `InvoiceDetail` / `invoice detail` → `InvoiceDetail`. */
 function pascalCase(value: string): string {
-  return value.replace(/(^|[-_\s/]+)(\w)/g, (_m, _s, c: string) => c.toUpperCase()).replace(/[^\w]/g, '');
+  // Accents retirés (« Paramètres » → Parametres), sinon \w les couperait.
+  return value.normalize('NFD').replace(/\p{Diacritic}/gu, '').replace(/(^|[-_\s/]+)(\w)/g, (_m, _s, c: string) => c.toUpperCase()).replace(/[^\w]/g, '');
 }
 
 function navigationManifest(deps: Record<string, string>): string {

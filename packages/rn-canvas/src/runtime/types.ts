@@ -74,6 +74,11 @@ export interface CanvasRuntimeConfig {
    * utilisent au lieu de valeurs génériques. Un tableau donne une vignette par variante.
    */
   examples?: Record<string, ComponentExample | ComponentExample[]>;
+  /**
+   * Appels réseau des écrans vers d'autres hôtes que localhost : coupés par défaut (`'offline'`),
+   * pour ne pas solliciter l'API de l'app depuis le canevas. `'allow'` les laisse passer.
+   */
+  network?: 'offline' | 'allow';
 }
 
 /** Fichier généré par `rn-canvas generate`. */

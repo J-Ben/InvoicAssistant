@@ -229,3 +229,74 @@ test('bibliothèque : fichiers morts (anciennes versions, stories, mocks) ignor�
   const names = new Project(root).components().filter((c) => c.file).map((c) => c.name);
   assert.deepEqual(names, ['Card']);
 });
+
+test('React Navigation : noms en constantes, imports par alias, piles imbriquées et aiguillages, noms calculés signalés', async () => {
+  const { Project } = await import('../src/server/project.ts');
+  const root = project({
+    'package.json': '{"dependencies":{"@react-navigation/native":"6.0.0","@react-navigation/native-stack":"6.0.0"}}',
+    'tsconfig.json': '{\n  // commentaire\n  "extends": "./tsconfig.base.json",\n  "compilerOptions": { "paths": { "@app/*": ["app/*"] } }\n}\n',
+    'tsconfig.base.json': '{ "compilerOptions": { "baseUrl": "." } }',
+    'rn-canvas.json': '{"include":["app","canvas"]}',
+    'app/navigation/names.ts': "export const SCREENS = {\n  ORDERS: { LIST: 'OrderList', DETAIL: 'OrderDétail' },\n  HOME: `Home`,\n} as const;\n",
+    'app/navigation/root.tsx': `import { createNativeStackNavigator } from '@react-navigation/native-stack';
+import { SCREENS } from '@app/navigation/names';
+import Home from '@app/screens/Home';
+import { OrdersStack } from './orders';
+import { Tabs } from './tabs';
+const Stack = createNativeStackNavigator();
+export function Root() {
+  return (
+    <Stack.Navigator>
+      <Stack.Screen name={SCREENS.HOME} component={Home as any} />
+      <Stack.Screen name="Orders" component={OrdersStack} />
+      <Stack.Screen name="Tabs" component={Tabs} />
+    </Stack.Navigator>
+  );
+}
+`,
+    'app/navigation/orders.tsx': `import { createNativeStackNavigator } from '@react-navigation/native-stack';
+import { SCREENS } from './names';
+import { OrderList, OrderDetail } from '@app/screens/orders';
+const Stack = createNativeStackNavigator();
+export function OrdersStack() {
+  return (
+    <Stack.Navigator>
+      <Stack.Screen name={SCREENS.ORDERS.LIST} component={OrderList} />
+      <Stack.Screen name={SCREENS.ORDERS.DETAIL} component={OrderDetail} />
+    </Stack.Navigator>
+  );
+}
+`,
+    // Aiguillage : ne rend que des navigateurs.
+    'app/navigation/tabs.tsx': "import { OrdersStack } from './orders';\nimport { OldStack } from './old';\nexport function Tabs({ next }) { return next ? <OrdersStack /> : <OldStack />; }\n",
+    'app/navigation/old.tsx': "export function OldStack() { return <Stack.Navigator />; }\n",
+    'app/navigation/old.old.tsx': "import Home from '../screens/Home';\nexport function Dead() { return <Stack.Screen name=\"Dead\" component={Home} />; }\n",
+    'app/navigation/dynamic.tsx': "import Home from '../screens/Home';\nconst TABS = { a: Home };\nexport function Dyn() { return Object.keys(TABS).map((key) => <Tab.Screen key={key} name={key} component={Home} />); }\n",
+    'app/screens/Home.tsx': 'export default function Home() { return null; }\n',
+    'app/screens/orders/index.ts': "export * from './OrderList';\nexport { OrderDetail } from './OrderDetail';\n",
+    'app/screens/orders/OrderList.tsx': 'export function OrderList() { return null; }\n',
+    'app/screens/orders/OrderDetail.tsx': 'export function OrderDetail({ route }) { const { orderId } = route.params; return orderId; }\n',
+  });
+  const p = new Project(root);
+  const { created, skipped, navigators } = p.generateRouteStories();
+  assert.deepEqual([...created].sort(), ['canvas/Home.canvas.tsx', 'canvas/OrderDetail.canvas.tsx', 'canvas/OrderList.canvas.tsx']);
+  assert.deepEqual(navigators.sort(), ['Orders (app/navigation/orders.tsx)', 'Tabs (app/navigation/tabs.tsx)']);
+  assert.deepEqual(skipped, ['app/navigation/dynamic.tsx:3']);
+  const detail = fs.readFileSync(path.join(root, 'canvas/OrderDetail.canvas.tsx'), 'utf8');
+  // Nom de route accentué : titre gardé, nom de fichier translittéré ; paramètre lu par l'écran.
+  assert.match(detail, /title: "OrderDétail"/);
+  assert.match(detail, /params: \{ orderId: '1' \}/);
+});
+
+test("piste d'erreur : paramètre de route manquant (V8, JSC, Safari), clé absente des params déclarés", async () => {
+  const { hintFor } = await import('../src/runtime/hints.ts');
+  const story = 'canvas/OrderDetail.canvas.tsx#Actuel';
+  const v8 = new TypeError("Cannot destructure property 'mode' of 'route.params' as it is undefined.");
+  assert.match(hintFor(v8, null, story)!, /« mode ».*params: \{ mode: … \}.*canvas\/OrderDetail\.canvas\.tsx/);
+  assert.match(hintFor(new TypeError('Right side of assignment cannot be destructured'), null, story)!, /déstructure probablement route\.params/);
+  const reading = new TypeError("Cannot read properties of undefined (reading 'orderId')");
+  assert.match(hintFor(reading, null, story)!, /« orderId »/);
+  assert.match(hintFor(reading, { mode: 'edit' }, story)!, /absent des params de la variante \(mode\)/);
+  assert.equal(hintFor(reading, { orderId: '1' }, story), null);
+  assert.equal(hintFor(new Error('autre chose'), null, story), null);
+});

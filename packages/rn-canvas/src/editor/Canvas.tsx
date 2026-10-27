@@ -87,11 +87,15 @@ interface Props {
   isolateStories: boolean;
   /** Écrans affichés (cochés), dans l'ordre de la grille. */
   stories: StoryEntry[];
-  /** Tous les écrans : un écran décoché reste chargé mais masqué, pour réapparaître sans délai. */
+  /** Tous les écrans. Un écran décoché n'est pas chargé ; un écran loin de la vue est déchargé (voir `live`). */
   allStories: StoryEntry[];
+  /** Écran déchargé (sorti de la vue) : son état de chargement repart de zéro. */
+  onUnload?: (id: string) => void;
   device: Device;
   activeStory: string | null;
   errors: Record<string, string>;
+  /** Appels réseau coupés par écran (voir `network` dans rn-canvas.config.tsx). */
+  blocked?: Record<string, { count: number; hosts: string[] }>;
   /** Écrans affichés (premier rendu reçu) ; les autres montrent un indicateur de chargement. */
   loaded: Record<string, LoadState>;
   /** Stockage de rechange par écran (voir `storyUrl`). */
@@ -126,8 +130,18 @@ interface Props {
  * Canevas infini : déplacement (glisser le fond, molette), zoom (Ctrl/⌘ + molette, boutons).
  * Un écran se déplace en glissant son nom ; sa position est mémorisée (bouton ⊞ : grille d'origine).
  */
+/** Écrans chargés en parallèle : chacun charge l'app entière dans son iframe. */
+const MAX_PARALLEL_LOADS = 4;
+const LOAD_TIMEOUT = 30_000;
+/** Écrans montés au plus (chacun garde une copie de l'app en mémoire). */
+const MAX_LIVE = 12;
+/** Marges autour de la vue, en fraction de sa taille : pour monter un écran, et pour le garder monté. */
+const ENTER_MARGIN = 0.25;
+const STAY_MARGIN = 1;
+
 export function Canvas(props: Props) {
-  const { appUrl, isolateStories, stories, allStories, device, activeStory, errors, loaded, generations, flows, frames, onActivate, empty, reveal, children } = props;
+  const { appUrl, isolateStories, stories, allStories, device, activeStory, errors, loaded, generations, flows, frames, onActivate, onUnload, empty, reveal, children } = props;
+  const { blocked = {} } = props;
   const { page, onChangePage, onCreateParcours, flowMode, onFlowMode, isolate, onBackgroundClick, showBoardTools = true, showLabels = true } = props;
   const viewport = useRef<HTMLDivElement>(null);
   // Vue mémorisée par page : ni un rechargement ni l'ajout / le masquage d'un écran ne la réinitialisent.
@@ -140,8 +154,7 @@ export function Canvas(props: Props) {
   const columns = Math.max(1, Math.min(COLUMNS, stories.length));
   const cellWidth = device.width + GAP;
   const cellHeight = device.height + LABEL + GAP;
-  const pending = stories.filter((s) => !loaded[s.id]).length;
-  const gridIndex = useMemo(() => new Map(stories.map((s, i) => [s.id, i])), [stories]);
+  const visible = useMemo(() => new Set(stories.map((s) => s.id)), [stories]);
 
   // Positions choisies à la main (coin haut gauche, nom compris) ; les autres écrans restent en grille.
   const positions = page.positions;
@@ -152,14 +165,90 @@ export function Canvas(props: Props) {
   const setGroups = useCallback((update: (g: BoardGroup[]) => BoardGroup[]) => onChangePage((pg) => ({ ...pg, groups: update(pg.groups) })), [onChangePage]);
   const setNotes = useCallback((update: (n: BoardNote[]) => BoardNote[]) => onChangePage((pg) => ({ ...pg, notes: update(pg.notes) })), [onChangePage]);
   const [editing, setEditing] = useState<string | null>(null);
+  // Les écrans non placés à la main se rangent en grille, sous ce qui est déjà disposé : un nouvel
+  // écran (fichier canvas ajouté, `rn-canvas screens`) ne tombe ni sur un écran placé ni dans un groupe.
+  const gridIndex = useMemo(() => new Map(stories.filter((s) => !positions[s.id]).map((s, i) => [s.id, i])), [stories, positions]);
+  const gridOrigin = useMemo(() => {
+    const boxes = [
+      ...stories.filter((s) => positions[s.id]).map((s) => ({ ...positions[s.id], width: device.width, height: device.height + LABEL })),
+      ...page.groups,
+      ...page.notes.map((n) => ({ ...n, height: 120 })),
+    ];
+    if (boxes.length === 0) return { x: 0, y: 0 };
+    return { x: Math.min(...boxes.map((b) => b.x)), y: Math.max(...boxes.map((b) => b.y + b.height)) + GAP * 2 };
+  }, [stories, positions, page.groups, page.notes, device]);
   const positionOf = useCallback(
     (id: string): Point | null => {
-      const i = gridIndex.get(id);
-      if (i === undefined) return null;
-      return positions[id] ?? { x: (i % columns) * cellWidth, y: Math.floor(i / columns) * cellHeight };
+      if (!visible.has(id)) return null;
+      if (positions[id]) return positions[id];
+      const i = gridIndex.get(id) ?? 0;
+      return { x: gridOrigin.x + (i % columns) * cellWidth, y: gridOrigin.y + Math.floor(i / columns) * cellHeight };
     },
-    [gridIndex, positions, columns, cellWidth, cellHeight],
+    [visible, gridIndex, gridOrigin, positions, columns, cellWidth, cellHeight],
   );
+
+  // Virtualisation : chaque écran est une iframe qui charge toute l'app (bundle de dev de plusieurs
+  // dizaines de Mo, servi sans cache). Seuls les écrans dans la vue ou juste autour restent montés, au
+  // plus MAX_LIVE, les plus proches du centre ; l'écran actif reste toujours monté. Un écran ne sort
+  // qu'au-delà d'une marge plus large que celle qui le fait entrer, pour ne pas recharger au moindre
+  // déplacement. Les écrans décochés ne sont jamais chargés.
+  const liveRef = useRef<Set<string>>(new Set());
+  const live = useMemo(() => {
+    const rect = viewport.current?.getBoundingClientRect();
+    const width = rect?.width ?? 0;
+    const height = rect?.height ?? 0;
+    const cx = (width / 2 - view.x) / view.zoom;
+    const cy = (height / 2 - view.y) / view.zoom;
+    const area = (margin: number) => ({
+      left: (-view.x - width * margin) / view.zoom,
+      top: (-view.y - height * margin) / view.zoom,
+      right: (width * (1 + margin) - view.x) / view.zoom,
+      bottom: (height * (1 + margin) - view.y) / view.zoom,
+    });
+    const enter = area(ENTER_MARGIN);
+    const stay = area(STAY_MARGIN);
+    const overlaps = (p: Point, a: ReturnType<typeof area>) => p.x < a.right && p.x + device.width > a.left && p.y < a.bottom && p.y + device.height + LABEL > a.top;
+    const candidates: { id: string; distance: number }[] = [];
+    for (const s of stories) {
+      const p = positionOf(s.id);
+      if (!p) continue;
+      if (s.id === activeStory || overlaps(p, enter) || (liveRef.current.has(s.id) && overlaps(p, stay))) {
+        candidates.push({ id: s.id, distance: s.id === activeStory ? -1 : Math.hypot(p.x + device.width / 2 - cx, p.y + device.height / 2 - cy) });
+      }
+    }
+    const next = new Set(candidates.sort((a, b) => a.distance - b.distance).slice(0, MAX_LIVE).map((c) => c.id));
+    liveRef.current = next;
+    return next;
+  }, [stories, positionOf, view, device, activeStory]);
+
+  // Compteur : écrans montés pas encore affichés.
+  const pending = [...live].filter((id) => !loaded[id]).length;
+
+  // Parmi les écrans montés, au plus MAX_PARALLEL_LOADS en cours de chargement à la fois. Un écran qui ne
+  // répond pas libère sa place au bout de LOAD_TIMEOUT.
+  const [admitted, setAdmitted] = useState<Record<string, number>>({});
+  useEffect(() => {
+    // Sortis de la vue : démontés, et leur état de chargement repart de zéro.
+    const gone = Object.keys(admitted).filter((id) => !live.has(id));
+    if (gone.length) {
+      setAdmitted((a) => Object.fromEntries(Object.entries(a).filter(([id]) => live.has(id))));
+      for (const id of gone) onUnload?.(id);
+      return;
+    }
+    const now = Date.now();
+    const inFlight = Object.entries(admitted).filter(([id, at]) => !loaded[id] && !errors[id] && now - at < LOAD_TIMEOUT).length;
+    const free = MAX_PARALLEL_LOADS - inFlight;
+    // `live` est déjà trié du plus proche au plus loin du centre.
+    const waiting = [...live].filter((id) => !(id in admitted));
+    if (free > 0 && waiting.length) {
+      setAdmitted((a) => ({ ...a, ...Object.fromEntries(waiting.slice(0, free).map((id) => [id, now])) }));
+      return;
+    }
+    if (inFlight === 0 || waiting.length === 0) return;
+    // File pleine : réexaminer quand un délai de garde expire.
+    const timer = window.setTimeout(() => setAdmitted((a) => ({ ...a })), 5000);
+    return () => window.clearTimeout(timer);
+  }, [admitted, live, loaded, errors, onUnload]);
 
   // Emprise des écrans affichés, pour « tout afficher » et le calque des flèches.
   const bounds = useMemo(() => {
@@ -542,26 +631,40 @@ export const Default = { props: {} };`}</pre>
                 {story.file.split('/').pop()!.replace(/\.canvas\.\w+$/, '')} · {story.title}
               </button>
               <div className="frame" style={{ width: device.width, height: device.height }}>
-                <iframe
-                  title={story.id}
-                  src={storyUrl(appUrl, story, isolateStories, generations[story.id])}
-                  width={device.width}
-                  height={device.height}
-                  ref={(el) => {
-                    if (el) frames.set(story.id, el);
-                    else frames.delete(story.id);
-                  }}
-                />
-                {!loaded[story.id] && (
-                  <div className="frame-loading" role="status">
-                    <span className="spinner" />
-                    Chargement de l'écran…
-                  </div>
+                {story.id in admitted && (
+                  <iframe
+                    title={story.id}
+                    src={storyUrl(appUrl, story, isolateStories, generations[story.id])}
+                    width={device.width}
+                    height={device.height}
+                    ref={(el) => {
+                      if (el) frames.set(story.id, el);
+                      else frames.delete(story.id);
+                    }}
+                  />
+                )}
+                {!live.has(story.id) ? (
+                  <div className="frame-loading frame-asleep">Hors de la vue · chargé en s'en approchant</div>
+                ) : (
+                  !loaded[story.id] && (
+                    <div className="frame-loading" role="status">
+                      <span className="spinner" />
+                      {story.id in admitted ? "Chargement de l'écran…" : 'En attente…'}
+                    </div>
+                  )
                 )}
                 {loaded[story.id] === 'empty' && !errors[story.id] && (
                   <div className="frame-empty">Rien d'affiché : données vides ou redirection ? Ouvrez-le en mode Interaction.</div>
                 )}
                 {errors[story.id] && <div className="frame-error">{errors[story.id]}</div>}
+                {blocked[story.id] && (
+                  <span
+                    className="frame-network"
+                    title={`Réseau coupé dans le canevas : ${blocked[story.id].hosts.join(', ')}.\nPour l'autoriser : network: 'allow' dans rn-canvas.config.tsx.`}
+                  >
+                    ⦸ {blocked[story.id].count} appel{blocked[story.id].count > 1 ? 's' : ''} bloqué{blocked[story.id].count > 1 ? 's' : ''}
+                  </span>
+                )}
               </div>
             </section>
           );
@@ -587,7 +690,7 @@ export const Default = { props: {} };`}</pre>
       {pending > 0 && (
         <div className="canvas-progress" role="status">
           <span className="spinner" />
-          Chargement des écrans · {stories.length - pending}/{stories.length}
+          Chargement des écrans de la vue · {live.size - pending}/{live.size}
         </div>
       )}
       {flowLayout && flowView && <FlowLegend layout={flowLayout} view={flowView} mode={page.groups.length ? flowMode : 'all'} onMode={onFlowMode} hasGroups={page.groups.length > 0} parcours={page.stories !== null} />}
@@ -679,8 +782,8 @@ function GroupFrame({ group, shift, zoom, editing, members, leaving, nameOf, onE
         <button onClick={onParcours} disabled={members === 0} title="Créer un parcours (nouvelle page) avec les écrans de ce groupe">
           ⇢ Parcours
         </button>
-        <button onClick={onRemove} title="Supprimer le groupe (les écrans restent)" aria-label="Supprimer le groupe">
-          ×
+        <button className="board-ungroup" onClick={onRemove} title="Dégrouper : supprime le cadre du groupe, les écrans et notes restent en place" aria-label="Dégrouper">
+          Dégrouper
         </button>
       </div>
       <div className="board-resize" style={{ transform: `scale(${scale})` }} onPointerDown={onResizeDown} onPointerMove={onPointerMove} onPointerUp={onPointerUp} onPointerCancel={onPointerUp} title="Redimensionner" />

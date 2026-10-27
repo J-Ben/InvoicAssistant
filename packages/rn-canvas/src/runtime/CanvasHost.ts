@@ -3,6 +3,10 @@ import { ScrollView, StyleSheet, Text, View } from 'react-native';
 import { startInspector, StoryRoot } from './inspector';
 import { hasNavigation, NavigationShell, setNavigation } from './navigation';
 import { RouteParams, setRouteParamsContext } from './params';
+import { blockNetwork } from './network';
+import { hintFor } from './hints';
+
+export { hintFor };
 import type { CanvasManifest, CanvasMeta, CanvasStoryObject, CanvasWrapperProps } from './types';
 
 /** Props ajoutées par le navigateur (React Navigation) : `navigation`, `route`. */
@@ -99,6 +103,8 @@ export function CanvasHost({ storyId, loadManifest }: { storyId: string; loadMan
   const [state] = useState(() => {
     try {
       const manifest = loadManifest();
+      // Pas d'appels réseau vers l'API de l'app depuis un écran du canevas, sauf `network: 'allow'`.
+      if (manifest.config?.network !== 'allow') blockNetwork(storyId);
       if (manifest.router) neutralizeRouter(manifest.router, storyId);
       setRouteParamsContext(manifest.routeParams);
       setNavigation(manifest.router ? null : manifest.navigation, storyId);
@@ -136,7 +142,7 @@ export function CanvasHost({ storyId, loadManifest }: { storyId: string; loadMan
   for (const Wrapper of [...story.wrappers].reverse()) {
     element = h(Wrapper, { story: { id: storyId, parameters: story.parameters }, children: element });
   }
-  return h(ErrorBoundary, { storyId, hasParams: Boolean(story.params) }, h(View, { style: styles.root }, element));
+  return h(ErrorBoundary, { storyId, params: story.params }, h(View, { style: styles.root }, element));
 }
 
 const NAVIGATION_METHODS = ['navigate', 'push', 'replace', 'back', 'goBack', 'dismiss', 'dismissAll', 'dismissTo', 'linkTo', 'reload'];
@@ -174,7 +180,8 @@ function StoryRender({ render }: { render: () => ReactElement }) {
   return render();
 }
 
-class ErrorBoundary extends Component<{ storyId: string; hasParams: boolean; children?: ReactNode }, { error: Error | null }> {
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+class ErrorBoundary extends Component<{ storyId: string; params: Record<string, any> | null; children?: ReactNode }, { error: Error | null }> {
   state = { error: null as Error | null };
 
   static getDerivedStateFromError(error: Error) {
@@ -186,18 +193,8 @@ class ErrorBoundary extends Component<{ storyId: string; hasParams: boolean; chi
   }
 
   render() {
-    return this.state.error ? h(ErrorView, { error: this.state.error, hint: hintFor(this.state.error, this.props.hasParams) }) : this.props.children;
+    return this.state.error ? h(ErrorView, { error: this.state.error, hint: hintFor(this.state.error, this.props.params, this.props.storyId) }) : this.props.children;
   }
-}
-
-/**
- * Piste pour l'erreur la plus fréquente d'un écran affiché seul : il lit un paramètre de route
- * (`route.params.id`, `useLocalSearchParams()`) que personne ne lui a passé.
- */
-export function hintFor(error: Error, hasParams: boolean): string | null {
-  const reading = /Cannot read propert(?:y|ies) of undefined \(reading '([^']+)'\)|undefined is not an object \(evaluating '[^']*?\.?(\w+)'\)/.exec(error.message);
-  if (!reading || hasParams) return null;
-  return `L'écran lit probablement un paramètre de route (« ${reading[1] ?? reading[2]} ») : déclarez-le dans son fichier canvas, ex. params: { id: '42' }.`;
 }
 
 function ErrorView({ error, hint }: { error: Error; hint?: string | null }) {

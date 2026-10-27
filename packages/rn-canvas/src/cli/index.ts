@@ -70,9 +70,17 @@ function mcp() {
   serveMcp(new Project(root), pkg.version);
 }
 
+/** Ce que la lecture de la navigation n'a pas transformé en écran, et pourquoi. */
+function logNavigationReport(skipped: string[], navigators: string[]) {
+  const list = (items: string[]) => `${items.slice(0, 4).join(', ')}${items.length > 4 ? '…' : ''}`;
+  if (navigators.length) console.log(`  • ${navigators.length} pile(s) imbriquée(s) lue(s) comme navigateurs, pas comme écrans : ${list(navigators)}`);
+  if (skipped.length) console.log(`  • ${skipped.length} écran(s) au nom calculé à l'exécution, ignoré(s) : ${list(skipped)}`);
+}
+
 function screens() {
   const project = new Project(root);
-  const { created } = project.generateRouteStories();
+  const { created, skipped, navigators } = project.generateRouteStories();
+  logNavigationReport(skipped, navigators);
   if (!created.length) {
     return log(project.config.routerRoot ? 'Chaque route a déjà son écran.' : 'Aucun écran à créer : chaque écran React Navigation (<Stack.Screen name component>) a déjà le sien, ou aucun n’a été trouvé.');
   }
@@ -336,9 +344,10 @@ function init() {
   if (generated?.components.length) log(`Données d'exemple tirées des types : ${generated.components.length} composant(s) dans ${generated.file}.`);
   if (!fs.existsSync(path.join(root, project.config.runtimeConfig))) writeProviders(project, false);
   {
-    const { created } = project.generateRouteStories();
+    const { created, skipped, navigators } = project.generateRouteStories();
     const origin = project.config.routerRoot ? `${project.config.routerRoot}/` : 'la navigation (React Navigation)';
     if (created.length) log(`${created.length} écran(s) créé(s) depuis ${origin} dans ${path.dirname(created[0])}/.`);
+    logNavigationReport(skipped, navigators);
   }
 
   project.writeManifest();

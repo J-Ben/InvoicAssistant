@@ -98,12 +98,12 @@ export function proposeProviders(root: string, layoutFile: string, configFile = 
   if (!finalReturn) return null;
 
   const localComponents = new Set<string>(program.body.flatMap((s: AstNode) => declaredFunctions(s)));
-  const skipped: string[] = [];
+  const skipped: Skipped[] = [];
   const wrappers = chain(unwrap(finalReturn.argument), localComponents, skipped);
   if (wrappers.length === 0) return null;
 
   const module = moduleNames(program);
-  const todo: string[] = skipped.map((n) => `<${n}> écarté : effets de bord (télémétrie, mise à jour OTA, notifications ou analytics).`);
+  const todo: string[] = skipped.map((s) => `<${s.name}> écarté : ${s.reason}.`);
   const extraImports: string[] = [];
   const extraDeclarations: string[] = [];
   const needed = new Set<string>();
@@ -339,7 +339,13 @@ const nameOf = (node: AstNode) => (node.type === 'JSXElement' ? (jsxName(node.op
  * chacun les éléments à garder à côté de l'enfant suivant (portails, toasts). Les fournisseurs à
  * effets de bord sont sautés (leur nom va dans `skipped`) mais on descend dans leur contenu.
  */
-function chain(node: AstNode, localComponents: Set<string>, skipped: string[]): { node: AstNode; hosts: AstNode[] }[] {
+/** Élément du layout non repris dans les fournisseurs, avec la raison (listé dans « À compléter »). */
+interface Skipped {
+  name: string;
+  reason: string;
+}
+
+function chain(node: AstNode, localComponents: Set<string>, skipped: Skipped[]): { node: AstNode; hosts: AstNode[] }[] {
   if (node.type === 'JSXFragment') {
     const next = pickChild(node.children, localComponents);
     return next ? chain(next, localComponents, skipped) : [];
@@ -349,11 +355,21 @@ function chain(node: AstNode, localComponents: Set<string>, skipped: string[]): 
   if (!name) return [];
   const base = name.split('.')[0];
   const last = name.split('.').pop()!;
-  if (NAVIGATION.has(base) || NAVIGATION.has(last) || SIDE.has(base) || HOST.test(name) || localComponents.has(base)) return [];
+  if (localComponents.has(base) && !NAVIGATION.has(base)) {
+    skipped.push({ name, reason: "composant local du layout, qui enveloppe la navigation : non repris (à recopier dans le wrapper si l'écran en dépend)" });
+    return [];
+  }
+  if (NAVIGATION.has(base) || NAVIGATION.has(last) || SIDE.has(base) || HOST.test(name)) return [];
   const next = pickChild(node.children, localComponents);
   if (!next) return [];
+  // Les frères de l'élément qui mène à la navigation (overlays, bandeaux, piles de toasts) ne sont pas
+  // repris : listés pour que l'utilisateur décide. La barre d'état (SIDE) n'a pas besoin d'être signalée.
+  for (const c of node.children) {
+    if (c === next || c.type !== 'JSXElement' || HOST.test(nameOf(c)) || SIDE.has(nameOf(c).split('.')[0])) continue;
+    skipped.push({ name: nameOf(c), reason: 'affiché à côté de la navigation (overlay, bandeau…) : non repris' });
+  }
   if (SIDE_EFFECTS.test(base) || SIDE_EFFECTS.test(name)) {
-    skipped.push(name);
+    skipped.push({ name, reason: 'effets de bord (télémétrie, mise à jour OTA, notifications ou analytics)' });
     return chain(next, localComponents, skipped);
   }
   const hosts = node.children.filter((c: AstNode) => c !== next && c.type === 'JSXElement' && HOST.test(nameOf(c)));

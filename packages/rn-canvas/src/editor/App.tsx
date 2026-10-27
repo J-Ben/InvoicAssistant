@@ -65,6 +65,8 @@ export function App() {
   const [device, setDevice] = useState<Device>(DEVICES[0]);
   const [trees, setTrees] = useState<Record<string, LayerNode[]>>({});
   const [storyErrors, setStoryErrors] = useState<Record<string, string>>({});
+  // Appels réseau coupés par écran (hôtes distincts), affichés sur son cadre.
+  const [blocked, setBlocked] = useState<Record<string, { count: number; hosts: string[] }>>({});
   const [loaded, setLoaded] = useState<Record<string, LoadState>>({});
   const markLoaded = useCallback((id: string, state: LoadState) => setLoaded((l) => (l[id] === 'shown' || l[id] === state ? l : { ...l, [id]: state })), []);
   const [activeStory, setActiveStory] = useState<string | null>(null);
@@ -246,6 +248,19 @@ export function App() {
           }
           setStoryErrors((e) => ({ ...e, [data.story]: data.message }));
           markLoaded(data.story, 'shown');
+          break;
+        }
+        case 'network-blocked': {
+          let host = data.url;
+          try {
+            host = new URL(data.url).host;
+          } catch {
+            // URL relative ou invalide : affichée telle quelle.
+          }
+          setBlocked((all) => {
+            const hosts = all[data.story]?.hosts ?? [];
+            return { ...all, [data.story]: { count: data.count, hosts: hosts.includes(host) ? hosts : [...hosts, host] } };
+          });
           break;
         }
         case 'navigate':
@@ -713,12 +728,14 @@ export function App() {
           device={device}
           activeStory={activeStory}
           errors={storyErrors}
+          blocked={blocked}
           loaded={loaded}
           generations={generations}
           flows={showFlows ? { links: flows, rects: flowRects } : null}
           reveal={reveal}
           frames={frames.current}
           onActivate={setActiveStory}
+          onUnload={resetLoad}
           empty={stories.length === 0}
           onBackgroundClick={clearSelection}
           showBoardTools={display.boardTools}
@@ -791,7 +808,23 @@ export function App() {
         />
       )}
 
-      {toast && <div className={`toast ${toast.kind}`}>{toast.text}</div>}
+      <button
+        className={`panel-toggle left${display.leftPanel ? '' : ' closed'}`}
+        onClick={() => setDisplay('leftPanel', !display.leftPanel)}
+        title={display.leftPanel ? 'Masquer le panneau de gauche (⌘\\ : les deux panneaux)' : 'Afficher le panneau de gauche'}
+        aria-label={display.leftPanel ? 'Masquer le panneau de gauche' : 'Afficher le panneau de gauche'}
+      >
+        {display.leftPanel ? '‹' : '›'}
+      </button>
+      <button
+        className={`panel-toggle right${display.rightPanel ? '' : ' closed'}`}
+        onClick={() => setDisplay('rightPanel', !display.rightPanel)}
+        title={display.rightPanel ? "Masquer l'inspecteur (⌘\\ : les deux panneaux)" : "Afficher l'inspecteur"}
+        aria-label={display.rightPanel ? "Masquer l'inspecteur" : "Afficher l'inspecteur"}
+      >
+        {display.rightPanel ? '›' : '‹'}
+      </button>
+      {toast && <div className={`toast ${toast.kind}${display.libraryBar ? ' above-library' : ''}`}>{toast.text}</div>}
     </div>
   );
 }

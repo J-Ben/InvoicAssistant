@@ -128,14 +128,93 @@ function localFunction(program: AstNode, name: string): boolean {
   });
 }
 
-/** Fichier importé par un chemin relatif (`./app/app` → app/app.tsx), extensions et index compris. */
+/**
+ * Fichier importé (`./app/app` → app/app.tsx), extensions et index compris. Un import par alias
+ * (`@app/screens/home`) est résolu avec les `paths` de tsconfig.json (ou jsconfig.json).
+ */
 export function resolveRelative(root: string, fromFile: string, source: string): string | null {
-  if (!source.startsWith('.')) return null;
-  const base = path.resolve(root, path.dirname(fromFile), source);
+  if (!source.startsWith('.')) return resolveAlias(root, source);
+  return resolveBase(root, path.resolve(root, path.dirname(fromFile), source));
+}
+
+function resolveBase(root: string, base: string): string | null {
   for (const candidate of [base, ...SOURCE.map((ext) => base + ext), ...SOURCE.map((ext) => path.join(base, `index${ext}`))]) {
     if (isFile(candidate)) return path.relative(root, candidate).split(path.sep).join('/');
   }
   return null;
+}
+
+function resolveAlias(root: string, source: string): string | null {
+  for (const { pattern, targets } of pathAliases(root)) {
+    const star = pattern.indexOf('*');
+    let rest: string | null = null;
+    if (star < 0) {
+      if (source === pattern) rest = '';
+    } else if (source.startsWith(pattern.slice(0, star)) && source.endsWith(pattern.slice(star + 1)) && source.length >= pattern.length - 1) {
+      rest = source.slice(star, source.length - (pattern.length - star - 1));
+    }
+    if (rest === null) continue;
+    for (const target of targets) {
+      const found = resolveBase(root, target.replace('*', rest));
+      // Un alias vers un paquet (node_modules) ou hors du projet n'est pas un fichier de l'app.
+      if (found && !found.startsWith('..') && !found.split('/').includes('node_modules')) return found;
+    }
+  }
+  return null;
+}
+
+const aliasCache = new Map<string, { pattern: string; targets: string[] }[]>();
+
+/** `compilerOptions.paths` (avec `baseUrl` et les `extends` relatifs), les plus précis du fichier racine d'abord. */
+function pathAliases(root: string): { pattern: string; targets: string[] }[] {
+  const cached = aliasCache.get(root);
+  if (cached) return cached;
+  const out: { pattern: string; targets: string[] }[] = [];
+  const visit = (file: string, depth: number) => {
+    let json: { extends?: unknown; compilerOptions?: { baseUrl?: string; paths?: Record<string, unknown> } };
+    try {
+      json = JSON.parse(stripJsonComments(fs.readFileSync(file, 'utf8')).replace(/,(\s*[}\]])/g, '$1'));
+    } catch {
+      return;
+    }
+    // Configuration étendue d'abord : les `paths` du fichier courant passent devant.
+    if (depth < 4 && typeof json.extends === 'string' && json.extends.startsWith('.')) {
+      const parent = path.resolve(path.dirname(file), json.extends);
+      visit(parent.endsWith('.json') ? parent : `${parent}.json`, depth + 1);
+    }
+    const options = json.compilerOptions ?? {};
+    const base = path.resolve(path.dirname(file), options.baseUrl ?? '.');
+    for (const [pattern, targets] of Object.entries(options.paths ?? {})) {
+      if (Array.isArray(targets)) out.unshift({ pattern, targets: targets.map((t) => path.resolve(base, String(t))) });
+    }
+  };
+  const config = ['tsconfig.json', 'jsconfig.json'].map((f) => path.join(root, f)).find(isFile);
+  if (config) visit(config, 0);
+  aliasCache.set(root, out);
+  return out;
+}
+
+/** Retire les commentaires d'un JSON « à la tsconfig », sans toucher aux chaînes (`"@app/*"`). */
+export function stripJsonComments(text: string): string {
+  let out = '';
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (c === '"') {
+      const start = i;
+      for (i++; i < text.length && text[i] !== '"'; i++) if (text[i] === '\\') i++;
+      out += text.slice(start, i + 1);
+    } else if (c === '/' && text[i + 1] === '/') {
+      while (i < text.length && text[i] !== '\n') i++;
+      out += '\n';
+    } else if (c === '/' && text[i + 1] === '*') {
+      i = text.indexOf('*/', i + 2);
+      if (i === -1) break;
+      i++;
+    } else {
+      out += c;
+    }
+  }
+  return out;
 }
 
 /**

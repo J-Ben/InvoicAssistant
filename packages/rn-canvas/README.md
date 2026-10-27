@@ -36,7 +36,7 @@ Chaque écran du canevas est rendu dans son propre conteneur React Navigation (`
 - `route.params` vaut le `params` du fichier canvas (`params: { invoiceId: 'F-104' }`) ;
 - une navigation vers un autre écran (`navigate('Detail')`, `goBack()`) n'est pas jouée : l'écran reste affiché seul et l'éditeur la signale.
 
-`npx rn-canvas screens` lit les `<X.Screen name="…" component={…} />` (et `getComponent`, et l'API statique `createNativeStackNavigator({ screens })`), suit les imports et réexports jusqu'au fichier de l'écran, et tire les paramètres requis des types `…ParamList` (`InvoiceDetail: { invoiceId: string }` → `params: { invoiceId: '1' }`), sinon des `route.params.x` lus par l'écran. Si un écran plante sur `Cannot read properties of undefined (reading 'x')` sans `params` déclarés, le message d'erreur le suggère.
+`npx rn-canvas screens` lit les `<X.Screen name="…" component={…} />` (et `getComponent`, et l'API statique `createNativeStackNavigator({ screens })`), suit les imports (relatifs ou par alias des `paths` de `tsconfig.json`) et réexports jusqu'au fichier de l'écran. Un nom de route en constante (`name={SCREENS.ORDERS.DETAIL}`, objet `const` du fichier ou importé) est résolu ; un nom calculé à l'exécution (`name={key}` dans un `.map`) est ignoré et signalé. Une pile imbriquée (composant qui déclare son propre `<X.Navigator>`, ou qui ne fait qu'aiguiller vers des navigateurs) n'est pas un écran : ses écrans sont générés à sa place. Les paramètres requis viennent des types `…ParamList` (`InvoiceDetail: { invoiceId: string }` → `params: { invoiceId: '1' }`), sinon des `route.params.x` lus par l'écran. Si un écran plante sur `Cannot read properties of undefined (reading 'x')` sans `params` déclarés, le message d'erreur le suggère.
 
 Branchement manuel du point d'entrée, si `init` ne peut pas le faire :
 
@@ -201,11 +201,15 @@ Si l'éditeur est ouvert en même temps, il affiche les modifications de l'IA en
 
 `ignoreRoutes` : routes sans interface (redirections…) que l'onglet Écrans et `rn-canvas screens` ne proposent pas, ex. `["app/budget/review.tsx"]`. L'onglet Écrans signale les autres routes sans fichier canvas, avec un bouton pour les créer.
 
+**Réseau coupé.** Dans le canevas, `fetch` et `XMLHttpRequest` vers un autre hôte que l'app ou `localhost` sont coupés par défaut (réponse 503, ou erreur réseau comme hors ligne) : pas d'appels à l'API de dev ou de préprod depuis un outil de design, ni de 401 en série sans session. Chaque écran affiche le nombre d'appels bloqués. Pour les laisser passer : `network: 'allow'` dans `rn-canvas.config.tsx`.
+
 `shims` : remplacements web propres au projet, `{ "module": "chemin/du/remplacement.js" }` (ou `false` pour désactiver un remplacement intégré). Actifs seulement dans le canevas (`RN_CANVAS=1`).
 
 **Remplacements web.** rn-canvas remplace déjà dans le canevas les modules natifs courants sans version web (expo-notifications, expo-secure-store, expo-file-system, ML Kit, notifee, CodePush, OneSignal, Sentry…). `npx rn-canvas doctor` signale les autres modules natifs importés par l'app, et `npx rn-canvas shim <module>` en crée un remplacement inoffensif dans `canvas/shims/` (toute propriété, à toute profondeur, est une fonction sans effet ; un HOC renvoie le composant reçu), avec la liste des exports trouvés dans ses types pour décrire au besoin des valeurs plus parlantes. iOS, Android et le build web habituel utilisent toujours le vrai module. Un `metro.config.js` qui remplace déjà le module pour le web (`resolveRequest`) est reconnu par `doctor`.
 
 `isolateStories` (activé par défaut si l'app tourne sur `localhost`) : chaque écran est servi depuis son propre sous-domaine (`accueil-actuel-1k2j.localhost:8081`), que les navigateurs résolvent vers la machine locale. Chaque écran a ainsi son propre stockage (localStorage, IndexedDB, OPFS) : pas de conflit entre écrans affichés en parallèle, ce qui est indispensable pour expo-sqlite sur le web, dont la base ne s'ouvre que dans un seul onglet à la fois.
+
+**Beaucoup d'écrans.** Chaque écran charge toute l'app dans son cadre. Seuls les écrans cochés, dans la vue ou juste autour, sont chargés (12 au plus, 4 à la fois, les plus proches du centre d'abord) ; un écran qui sort largement de la vue est déchargé, et rechargé en y revenant (son état d'interaction repart de sa variante, son stockage est gardé). Les panneaux latéraux se masquent par les boutons ‹ › à leur bord, ou ⌘\ pour les deux.
 
 ## Fonctionnement
 

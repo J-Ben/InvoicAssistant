@@ -8,6 +8,7 @@ import { Component, type ReactNode, Suspense, createElement as h, useEffect, use
 import { LogBox, Pressable, type PressableProps, ScrollView, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
 import type { EditorMessage, GalleryItem } from '../shared/protocol';
 import { neutralizeRouter } from './CanvasHost';
+import { blockNetwork } from './network';
 import { hasNavigation, NavigationShell, setNavigation } from './navigation';
 import type { CanvasManifest, ComponentExample } from './types';
 
@@ -26,7 +27,31 @@ function hasVisibleContent(target: unknown): boolean {
 const STORY = 'gallery';
 
 /** Composants qui s'affichent par-dessus l'écran (modale, plein écran) : pas d'aperçu dans une vignette. */
-const NO_PREVIEW = /(Modal|Sheet|Prompt|Overlay|Splash|Screen|Wizard|Provider|Bubble|Lock)$/;
+const NO_PREVIEW = /(Modal|Sheet|Prompt|Overlay|Splash|Screen|Wizard|Provider|Bubble|Lock|Popup|Popin|Dialog|Drawer|Popover)$/;
+/** Prop booléenne qui ouvre le composant : c'est une superposition, quel que soit son nom (`AddNotePanel`). */
+const OPEN_PROP = /^(visible|isVisible|open|isOpen|show|isShown|opened)$/;
+
+function isOverlay(item: GalleryItem): boolean {
+  return NO_PREVIEW.test(item.name) || item.props.some((p) => p.type === 'boolean' && OPEN_PROP.test(p.name));
+}
+
+/**
+ * Filet de sécurité : une modale (react-native-web la téléporte dans <body>) qui s'ouvrirait malgré
+ * tout dans une vignette recouvrirait toute la grille. Tout ce qui est ajouté à <body> hors de la
+ * racine de l'app est masqué dans le cadre des aperçus.
+ */
+function hidePortals() {
+  if (typeof document === 'undefined' || typeof MutationObserver === 'undefined') return;
+  const root = document.getElementById('root') ?? document.getElementById('main');
+  const hide = (node: Node) => {
+    if (node instanceof HTMLElement && node !== root && !node.contains(root) && node.tagName !== 'SCRIPT' && node.tagName !== 'STYLE') node.style.display = 'none';
+  };
+  // Déjà présents (modale ouverte avant cet appel) puis ajoutés ensuite.
+  document.body.childNodes.forEach(hide);
+  new MutationObserver((records) => {
+    for (const r of records) r.addedNodes.forEach(hide);
+  }).observe(document.body, { childList: true });
+}
 
 function post(message: { type: 'gallery-ready' } | { type: 'pick'; key: string } | { type: 'open'; key: string }) {
   window.parent?.postMessage({ source: 'rn-canvas', story: STORY, ...message }, '*');
@@ -72,6 +97,8 @@ export function GalleryHost({ loadManifest }: { loadManifest: () => CanvasManife
       // Sur le web, le bandeau d'erreurs d'Expo se nourrit de console.error (où React signale aussi les
       // erreurs rattrapées) : ce cadre ne sert qu'aux aperçus, on ne les y affiche pas.
       console.error = () => {};
+      hidePortals();
+      if (loaded.config?.network !== 'allow') blockNetwork(STORY);
       return loaded;
     } catch {
       return null;
@@ -127,7 +154,7 @@ function Cell({ item, example, load }: { item: GalleryItem; example: ComponentEx
   const missing = item.props.filter((p) => p.type === 'unknown' && p.name !== 'children' && !(example?.props && p.name in example.props)).map((p) => p.name);
 
   let preview: ReactNode;
-  if (NO_PREVIEW.test(item.name)) {
+  if (isOverlay(item)) {
     // Modale, panneau… : affichée par-dessus tout l'écran, elle a besoin d'un écran à elle.
     preview = h(
       View,
