@@ -59,7 +59,8 @@ function removalRange(code: string, node: AstNode): Patch {
 export function indentUnit(code: string): string {
   if (/^\t/m.test(code)) return '\t';
   let min = Infinity;
-  for (const m of code.matchAll(/^( +)\S/gm)) min = Math.min(min, m[1].length);
+  // Les lignes de commentaire de bloc (` * …`) ne disent rien du pas d'indentation.
+  for (const m of code.matchAll(/^( +)([^\s*])/gm)) min = Math.min(min, m[1].length);
   return ' '.repeat(Number.isFinite(min) && min <= 8 ? min : 2);
 }
 
@@ -161,6 +162,7 @@ export function componentJsx(name: string, props: ComponentProp[]): string {
   if (name === 'Text') return '<Text>Nouveau texte</Text>';
   if (name === 'TextInput') return '<TextInput placeholder="Saisir…" />';
   const attrs = props
+    .filter((p) => p.name !== 'children')
     .map((p) => {
       switch (p.type) {
         case 'string':
@@ -178,7 +180,12 @@ export function componentJsx(name: string, props: ComponentProp[]): string {
       }
     })
     .filter(Boolean);
-  return `<${name}${attrs.length ? ` ${attrs.join(' ')}` : ''} />`;
+  const open = `${name}${attrs.length ? ` ${attrs.join(' ')}` : ''}`;
+  // Composant de texte du projet (AppText, Typography…) : un texte d'exemple, sinon il serait invisible.
+  if (/(Text|Typography|Title|Heading)$/.test(name)) return `<${open}>Nouveau texte</${name}>`;
+  // Autre composant à enfants obligatoires : un emplacement vide, valide pour ReactNode.
+  if (props.some((p) => p.name === 'children')) return `<${open}>{null}</${name}>`;
+  return `<${open} />`;
 }
 
 /** Ajoute l'import d'un composant s'il n'est pas déjà en portée. `from` = spécificateur de module. */

@@ -391,7 +391,7 @@ export default manifest;
         if (!entry) throw new SourceError(`Composant « ${request.component.name} » introuvable dans la bibliothèque.`);
         const jsx = componentJsx(entry.name, entry.props);
         inserted = insertion(src, element, request.position, jsx, '');
-        const from = this.importPath(parsed.file, entry);
+        const from = this.importPath(parsed.file, entry, src);
         patches = [inserted, ...(from ? ensureImport(src, entry.name, from) : [])];
         break;
       }
@@ -436,12 +436,40 @@ export default manifest;
   }
 
   /** Spécificateur d'import d'un composant depuis `file` (chemin relatif, sans extension). */
-  private importPath(file: string, entry: ComponentEntry): string {
+  private importPath(file: string, entry: ComponentEntry, src?: SourceFile): string {
     if (!entry.file) return 'react-native';
     if (entry.file === file) return '';
+    // Même style que le fichier : alias de tsconfig (`@presentation/…`) s'il en importe déjà par cet alias.
+    const target = entry.file.replace(/\.(tsx|jsx|ts|js)$/, '').replace(/\/index$/, '');
+    for (const { alias, dir } of this.pathAliases()) {
+      if (!target.startsWith(`${dir}/`)) continue;
+      const used = src && programOf(src.ast).body.some((s: AstNode) => s.type === 'ImportDeclaration' && String(s.source.value).startsWith(`${alias}/`));
+      if (used) return `${alias}/${target.slice(dir.length + 1)}`;
+    }
     let rel = path.posix.relative(path.posix.dirname(file), entry.file).replace(/\.(tsx|jsx|ts|js)$/, '');
     if (!rel.startsWith('.')) rel = `./${rel}`;
     return rel;
+  }
+
+  /** Alias `paths` du tsconfig.json (`"@presentation/*": ["./src/presentation/*"]`). */
+  private pathAliases(): { alias: string; dir: string }[] {
+    let raw: string;
+    try {
+      raw = fs.readFileSync(path.join(this.root, 'tsconfig.json'), 'utf8');
+    } catch {
+      return [];
+    }
+    try {
+      // JSON avec commentaires et virgules finales (tolérés par TypeScript).
+      const json = JSON.parse(stripJsonComments(raw).replace(/,(\s*[}\]])/g, '$1'));
+      const options = json.compilerOptions ?? {};
+      const base = options.baseUrl ?? '.';
+      return Object.entries((options.paths ?? {}) as Record<string, string[]>)
+        .filter(([key, targets]) => key.endsWith('/*') && targets[0]?.endsWith('/*'))
+        .map(([key, targets]) => ({ alias: key.slice(0, -2), dir: path.posix.normalize(path.posix.join(base, targets[0].slice(0, -2))).replace(/^\.\//, '') }));
+    } catch {
+      return [];
+    }
   }
 
   private read(file: string): SourceFile {
@@ -513,6 +541,29 @@ function detectRouterRoot(root: string): string | null {
   const pkg = readJson(path.join(root, 'package.json')) as { dependencies?: Record<string, string> } | null;
   if (!pkg?.dependencies?.['expo-router']) return null;
   return ['app', 'src/app'].find((dir) => fs.existsSync(path.join(root, dir))) ?? null;
+}
+
+/** Retire les commentaires d'un JSON « à la tsconfig », sans toucher aux chaînes (`"@app/*"`). */
+export function stripJsonComments(text: string): string {
+  let out = '';
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (c === '"') {
+      const start = i;
+      for (i++; i < text.length && text[i] !== '"'; i++) if (text[i] === '\\') i++;
+      out += text.slice(start, i + 1);
+    } else if (c === '/' && text[i + 1] === '/') {
+      while (i < text.length && text[i] !== '\n') i++;
+      out += '\n';
+    } else if (c === '/' && text[i + 1] === '*') {
+      i = text.indexOf('*/', i + 2);
+      if (i === -1) break;
+      i++;
+    } else {
+      out += c;
+    }
+  }
+  return out;
 }
 
 function readJson(file: string): unknown {

@@ -145,3 +145,27 @@ test('import : un composant déjà importé par un alias n\'est pas réimporté'
   const other = parseCode(`import { AppText } from 'some-lib';\nexport const A = () => <AppText />;\n`, 'A.tsx');
   assert.throws(() => ensureImport(other, 'AppText', '../src/presentation/components/atoms/AppText'), /déjà défini/);
 });
+
+test('tsconfig : commentaires retirés sans toucher aux chaînes', async () => {
+  const { stripJsonComments } = await import('../src/server/project.ts');
+  const raw = `{ // racine\n  "paths": { "@app/*": ["./src/*"] }, /* bloc */ "include": ["**/*.ts"] }`;
+  assert.deepEqual(JSON.parse(stripJsonComments(raw)), { paths: { '@app/*': ['./src/*'] }, include: ['**/*.ts'] });
+});
+
+test("indentation : les lignes ' * ' des commentaires de bloc sont ignorées", async () => {
+  const { indentUnit } = await import('../src/server/structure.ts');
+  assert.equal(indentUnit(`/**\n * Doc\n */\nconst A = () => (\n  <View>\n    <Text />\n  </View>\n);\n`), '  ');
+});
+
+test('JSX inséré : texte d\'exemple pour les composants de texte, props obligatoires remplies', async () => {
+  const { componentJsx } = await import('../src/server/structure.ts');
+  assert.equal(componentJsx('AppText', []), '<AppText>Nouveau texte</AppText>');
+  assert.equal(componentJsx('Button', [{ name: 'label', type: 'string' }, { name: 'onPress', type: 'function' }]), '<Button label="Label" onPress={() => {}} />');
+  assert.equal(componentJsx('Text', []), '<Text>Nouveau texte</Text>');
+});
+
+test('JSX inséré : enfants obligatoires', async () => {
+  const { componentJsx } = await import('../src/server/structure.ts');
+  assert.equal(componentJsx('AppText', [{ name: 'children', type: 'unknown' }]), '<AppText>Nouveau texte</AppText>');
+  assert.equal(componentJsx('Card', [{ name: 'children', type: 'unknown' }, { name: 'title', type: 'string' }]), '<Card title="Title">{null}</Card>');
+});

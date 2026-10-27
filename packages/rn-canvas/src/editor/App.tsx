@@ -312,7 +312,11 @@ export function App() {
             setSelection(null);
             send(null, { type: 'select', loc: null });
           } else if (story) {
-            selectLoc(story, result.loc, request.op === 'insert' ? request.component.name : 'name' in request ? request.name : undefined);
+            const name = request.op === 'insert' ? request.component.name : 'name' in request ? request.name : '';
+            selectLoc(story, result.loc, name || undefined);
+            // Sélection mise à jour tout de suite (nouvel emplacement renvoyé par le serveur) : une action
+            // enchaînée avant le rendu de l'écran ne doit pas viser un emplacement périmé.
+            inspect(story, { loc: result.loc, name, ancestors: [{ loc: result.loc, name }], rect: null, computed: {} });
           }
           if (request.op === 'insert') loadProject();
         } else if (selection && result.loc) {
@@ -329,7 +333,7 @@ export function App() {
         showError((e as Error).message);
       }
     },
-    [selection, activeStory, send, selectLoc, loadProject],
+    [selection, activeStory, send, selectLoc, loadProject, inspect],
   );
 
   // Variante depuis l'état d'un écran : on demande son stockage, puis on l'écrit dans le fichier canvas.
