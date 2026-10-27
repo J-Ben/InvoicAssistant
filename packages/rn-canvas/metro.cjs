@@ -27,6 +27,10 @@ const BUILTIN_SHIMS = {
   '@react-native-ml-kit/text-recognition': 'mlkit-text-recognition.js',
   'react-native-android-widget': 'android-widget.js',
   'react-native-webrtc': 'webrtc.js',
+  'react-native-code-push': 'code-push.js',
+  '@revopush/react-native-code-push': 'code-push.js',
+  'react-native-onesignal': 'onesignal.js',
+  '@sentry/react-native': 'sentry.js',
 };
 
 /**

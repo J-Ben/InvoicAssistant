@@ -10,6 +10,7 @@
   "exports": {
     "./babel": "./babel.cjs",
     "./metro": "./metro.cjs",
+    "./shims/*": "./shims/*",
     "./runtime": "./src/runtime/index.ts",
     "./package.json": "./package.json"
   },

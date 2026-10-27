@@ -103,4 +103,44 @@ function tryLoad(load) {
   }
 }
 
-module.exports = { createShim, tryLoad, DENIED };
+/**
+ * Remplacement « profond » d'un module dont on ne connaît pas l'API : toute propriété, à toute
+ * profondeur, est une fonction sans effet (`OneSignal.Notifications.addEventListener(…)`), et
+ * un appel renvoie à nouveau un remplacement. Cas particuliers :
+ * - un HOC reçoit un composant et le renvoie tel quel (`codePush(options)(App)`, `wrap(App)`) ;
+ * - utilisé comme composant (props figées par React), il affiche ses enfants ;
+ * - jamais « thenable » : `await x()` donne un remplacement, pas une attente infinie.
+ */
+function deepShim(label, overrides = {}) {
+  const cache = new Map();
+  function RnCanvasShim(...args) {
+    const [first] = args;
+    if (typeof first === 'function') return first;
+    if (first && typeof first === 'object' && (Object.isFrozen(first) || 'children' in first)) return first.children ?? null;
+    return deepShim(`${label}()`);
+  }
+  RnCanvasShim.displayName = label;
+  const proxy = new Proxy(RnCanvasShim, {
+    get(target, key) {
+      if (key === '__esModule') return true;
+      if (typeof key === 'symbol') return key === Symbol.toPrimitive ? () => label : target[key];
+      if (key in overrides) return overrides[key];
+      if (key === 'default') return proxy;
+      if (key === 'then' || key === '$$typeof' || key === 'prototype' || key === 'displayName' || key === 'name' || key === 'length') return target[key];
+      if (!cache.has(key)) cache.set(key, deepShim(`${label}.${key}`));
+      return cache.get(key);
+    },
+    has: () => true,
+  });
+  return proxy;
+}
+
+/** Composant qui affiche simplement ses enfants (ErrorBoundary, Profiler…). */
+function passThrough(props) {
+  return (props && props.children) ?? null;
+}
+
+/** HOC sans effet : renvoie le composant tel quel. */
+const identity = (Component) => Component;
+
+module.exports = { createShim, deepShim, passThrough, identity, tryLoad, DENIED };

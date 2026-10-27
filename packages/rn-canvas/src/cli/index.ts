@@ -7,6 +7,7 @@
  *   rn-canvas screens    crée un fichier canvas par route d'expo-router qui n'en a pas
  *   rn-canvas examples   données d'exemple des composants, tirées des types de leurs props
  *   rn-canvas providers  propose rn-canvas.config.tsx à partir des fournisseurs du layout racine
+ *   rn-canvas shim <m>   remplacement web inoffensif d'un module natif, pour le canevas
  *   rn-canvas mcp        serveur MCP (stdio) pour piloter les écrans depuis une IA
  */
 import { spawn, type ChildProcess } from 'node:child_process';
@@ -18,16 +19,17 @@ import { serveMcp } from '../server/mcp.ts';
 import { CONFIG_FILE, Project } from '../server/project.ts';
 import { diagnose, installCommand, printChecks } from './doctor.ts';
 import { addBabelPlugin } from './patch.ts';
-import { proposeProviders, rootLayoutFile } from '../server/scaffold.ts';
+import { proposeProviders, rootComponentFile, skeletonConfig } from '../server/scaffold.ts';
 import { examplesFile } from '../server/examples.ts';
+import { writeShim } from '../server/shim.ts';
+import { BABEL_PLUGIN_ENTRY, METRO_TEMPLATE, analyzeEntry, manifestSpecifier, patchEntry, patchLayout, patchMetro } from '../server/setup.ts';
 
 const EDITOR_DIR = fileURLToPath(new URL('./editor', import.meta.url));
-const ENTRY_IMPORT = "import { withCanvas } from 'rn-canvas/runtime';";
 
 const [command = 'help', ...args] = process.argv.slice(2);
 const root = process.cwd();
 
-const commands: Record<string, () => Promise<void> | void> = { init, dev, generate, screens, providers, examples, mcp, doctor, help };
+const commands: Record<string, () => Promise<void> | void> = { init, dev, generate, screens, providers, examples, shim, mcp, doctor, help };
 await (commands[command] ?? help)();
 
 function flag(name: string): string | true | undefined {
@@ -58,6 +60,7 @@ function help() {
   rn-canvas examples             Génère les données d'exemple des composants à partir des types de leurs props
   rn-canvas providers            Reprend les fournisseurs de app/_layout.tsx (ou App.tsx) dans rn-canvas.config.tsx
               [--print]          … ou les affiche sans rien écrire
+  rn-canvas shim <module>        Remplace un module natif dans le canevas (canvas/shims/, ajouté à rn-canvas.json)
   rn-canvas doctor               Vérifie le projet : ce qui bloquera le canevas, et comment le corriger
   rn-canvas mcp                  Serveur MCP (stdio) : claude mcp add rn-canvas -- npx rn-canvas mcp`);
 }
@@ -78,20 +81,28 @@ function screens() {
 
 /** Écrit rn-canvas.config.tsx (s'il n'existe pas) avec les fournisseurs du layout racine. */
 function writeProviders(project: Project, print: boolean): void {
-  const layout = rootLayoutFile(root, project.config.routerRoot);
-  if (!layout) return log('Aucune mise en page racine trouvée (app/_layout.tsx, App.tsx) : pas de fournisseurs à reprendre.');
+  const rootFile = rootComponentFile(root, project.config.routerRoot);
   const generated = examplesFile(project.config.include);
-  const proposal = proposeProviders(root, layout, project.config.runtimeConfig, fs.existsSync(path.join(root, generated)) ? relativeImport(project.config.runtimeConfig, generated) : null);
-  if (!proposal) return log(`Aucun fournisseur reconnu dans ${layout} : ajoutez-les dans ${project.config.runtimeConfig} (voir README).`);
+  const examplesImport = fs.existsSync(path.join(root, generated)) ? relativeImport(project.config.runtimeConfig, generated) : null;
+  const proposal = rootFile ? proposeProviders(root, rootFile.file, project.config.runtimeConfig, examplesImport, rootFile.exportName) : null;
+  // Rien de repris : une configuration à compléter, avec la raison (plutôt que pas de fichier du tout).
+  const reason = !rootFile
+    ? "Composant racine introuvable (ni app/_layout, ni composant enregistré par le point d'entrée, ni App.tsx)."
+    : `Aucun fournisseur reconnu dans ${rootFile.file} (le JSX renvoyé par le composant racine n'enveloppe pas la navigation).`;
+  const code = proposal?.code ?? skeletonConfig(reason, examplesImport);
   const target = path.join(root, project.config.runtimeConfig);
   if (print || fs.existsSync(target)) {
     if (!print) log(`${project.config.runtimeConfig} existe déjà : proposition affichée, rien n'est écrit.`);
-    console.log(proposal.code);
+    console.log(code);
     return;
   }
-  fs.writeFileSync(target, proposal.code);
-  log(`${project.config.runtimeConfig} créé avec les fournisseurs de ${layout} : ${proposal.wrappers.join(', ')}.`);
-  for (const t of proposal.todo) console.log(`  • ${t}`);
+  fs.writeFileSync(target, code);
+  if (proposal) {
+    log(`${project.config.runtimeConfig} créé avec les fournisseurs de ${rootFile!.file} : ${proposal.wrappers.join(', ')}.`);
+    for (const t of proposal.todo) console.log(`  • ${t}`);
+  } else {
+    log(`${project.config.runtimeConfig} créé, à compléter : ${reason}`);
+  }
 }
 
 function examples() {
@@ -111,13 +122,32 @@ function relativeImport(from: string, to: string): string {
   return rel.startsWith('.') ? rel : `./${rel}`;
 }
 
+function shim() {
+  const names = args.filter((a) => !a.startsWith('--'));
+  if (!names.length) return log('Usage : rn-canvas shim <module> [<module>…]');
+  for (const name of names) {
+    if (!fs.existsSync(path.join(root, 'node_modules', name, 'package.json'))) log(`${name} n'est pas installé : remplacement écrit quand même.`);
+    const result = writeShim(root, name);
+    log(`${name} → ${result.file} ${result.created ? 'créé' : 'déjà présent'}, ajouté à ${CONFIG_FILE}${result.exports.length ? ` (${result.exports.length} export(s) listés)` : ''}.`);
+  }
+  log('Relancez Expo (RN_CANVAS=1) pour que Metro prenne le remplacement en compte.');
+}
+
 function providers() {
   writeProviders(new Project(root), flag('print') === true);
 }
 
 function generate() {
   const project = new Project(root);
-  log(project.writeManifest() ? `Manifeste écrit : ${project.config.manifest}` : 'Manifeste déjà à jour.');
+  const written = project.writeManifest();
+  const groups = project.stories();
+  const variants = groups.reduce((n, g) => n + g.stories.length, 0);
+  log(`${written ? `Manifeste écrit : ${project.config.manifest}` : 'Manifeste déjà à jour'} — ${groups.length} écran(s), ${variants} variante(s).`);
+  if (groups.length === 0) {
+    log(`Aucun fichier *.canvas.tsx dans ${project.config.include.join(', ') || '(aucun dossier)'} (option include de ${CONFIG_FILE}).`);
+    const outside = project.canvasFilesOutsideInclude();
+    if (outside.length) console.log(`  • Trouvés hors de include : ${outside.slice(0, 5).join(', ')}${outside.length > 5 ? '…' : ''}`);
+  }
 }
 
 async function dev() {
@@ -211,13 +241,15 @@ function init() {
   if (!fs.existsSync(configPath)) {
     const theme = findThemeFile();
     const config: Record<string, unknown> = { appUrl: 'http://localhost:8081' };
-    // Avec expo-router, tout fichier de app/ devient une route : les stories vont dans canvas/.
-    // Composants (src/, components/) pour la bibliothèque, écrans du canevas dans canvas/.
-    if (pkg.dependencies?.['expo-router']) config.include = [...['src', 'components'].filter((d) => fs.existsSync(path.join(root, d))), 'canvas'];
+    // Écrans du canevas dans canvas/ (avec expo-router, un fichier de app/ deviendrait une route) ;
+    // composants de la bibliothèque dans les dossiers de sources (app/ en est un sans expo-router).
+    const sources = pkg.dependencies?.['expo-router'] ? ['src', 'components'] : ['src', 'app', 'components'];
+    config.include = [...sources.filter((d) => fs.existsSync(path.join(root, d))), 'canvas'];
     if (theme) config.theme = theme;
     fs.writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`);
     log(`${CONFIG_FILE} créé${theme ? ` (thème : ${theme.file})` : ''}.`);
   }
+  fs.mkdirSync(path.join(root, 'canvas'), { recursive: true });
 
   // 2. Babel
   const babelPath = ['babel.config.js', 'babel.config.cjs', '.babelrc', '.babelrc.js'].map((f) => path.join(root, f)).find((f) => fs.existsSync(f));
@@ -228,8 +260,8 @@ function init() {
   api.cache(true);
   return {
     presets: ['babel-preset-expo'],
-    // Ne s'active que pour le bundle web de développement.
-    plugins: ['rn-canvas/babel'],
+    // rn-canvas : actif seulement pour le bundle web de développement, ignoré s'il n'est pas installé.
+    plugins: [${BABEL_PLUGIN_ENTRY}],
   };
 };
 `,
@@ -245,70 +277,42 @@ function init() {
     }
   }
 
-  // 3. Point d'entrée
+  // 3. Point d'entrée : mise en page racine d'expo-router, sinon le composant enregistré par l'entrée
+  // (registerRootComponent(App) ou AppRegistry.registerComponent(nom, () => App)).
   const usesRouter = Boolean(pkg.dependencies?.['expo-router']);
-  const layoutFile = ['app/_layout.tsx', 'app/_layout.jsx', 'app/_layout.js', 'src/app/_layout.tsx'].map((f) => path.join(root, f)).find((f) => fs.existsSync(f));
-  const manifestOf = (from: string) => {
-    let rel = path.relative(path.dirname(from), path.resolve(root, new Project(root).config.manifest)).split(path.sep).join('/').replace(/\.tsx?$/, '');
-    if (!rel.startsWith('.')) rel = `./${rel}`;
-    return rel;
-  };
-
-  if (usesRouter && layoutFile) {
-    // expo-router : on enveloppe la mise en page racine (app/_layout.tsx).
-    const code = fs.readFileSync(layoutFile, 'utf8');
-    const match = /export default function (\w+)\(/.exec(code);
-    if (code.includes('rn-canvas/runtime')) {
-      // Déjà branché.
-    } else if (match) {
-      const name = match[1];
-      const lastImport = [...code.matchAll(/^import [^;]+;$/gms)].pop();
-      const at = lastImport ? lastImport.index! + lastImport[0].length : 0;
-      const patched =
-        `${code.slice(0, at)}\n${ENTRY_IMPORT}${code.slice(at)}`.replace(match[0], `function ${name}(`) +
-        `\n// En développement web, rn-canvas peut afficher un écran isolé (?rnc-story=…) à la place de l'app.\n` +
-        `export default __DEV__ ? withCanvas(${name}, () => require('${manifestOf(layoutFile)}').default) : ${name};\n`;
-      fs.writeFileSync(layoutFile, patched);
-      log(`${path.relative(root, layoutFile)} branché (expo-router).`);
-    } else {
-      todo.push(`Dans ${path.relative(root, layoutFile)} : enveloppez la mise en page racine avec withCanvas (voir README de rn-canvas).`);
-    }
+  const manifest = new Project(root).config.manifest;
+  const layoutFile = ['app/_layout.tsx', 'app/_layout.jsx', 'app/_layout.js', 'src/app/_layout.tsx', 'src/app/_layout.jsx'].find((f) => fs.existsSync(path.join(root, f)));
+  const target = usesRouter && layoutFile ? { file: layoutFile, layout: true } : (() => {
+    const entry = analyzeEntry(root);
+    return entry ? { file: entry.file, layout: false } : null;
+  })();
+  if (!target) {
+    todo.push("Point d'entrée introuvable (main du package.json, index.js…) : enveloppez le composant racine avec withCanvas (voir README).");
   } else {
-    const entry = [pkg.main, 'index.ts', 'index.tsx', 'index.js'].filter(Boolean).map((f: string) => path.join(root, f)).find((f) => fs.existsSync(f));
-    const entryCode = entry ? fs.readFileSync(entry, 'utf8') : '';
-    if (entry && !entryCode.includes('rn-canvas/runtime') && /registerRootComponent\(App\);/.test(entryCode)) {
-      const patched = entryCode
-        .replace(/(import \{ registerRootComponent \} from 'expo';\n)/, `$1${ENTRY_IMPORT}\n`)
-        .replace(
-          'registerRootComponent(App);',
-          `// En développement web, rn-canvas peut afficher un écran isolé (?rnc-story=…) à la place de l'app.\nregisterRootComponent(__DEV__ ? withCanvas(App, () => require('${manifestOf(entry)}').default) : App);`,
-        );
-      if (patched.includes(ENTRY_IMPORT)) {
-        fs.writeFileSync(entry, patched);
-        log(`${path.basename(entry)} branché.`);
-      } else {
-        todo.push(`Dans ${path.basename(entry)} : enveloppez App avec withCanvas (voir README de rn-canvas).`);
-      }
-    } else if (!entryCode.includes('rn-canvas/runtime')) {
-      todo.push("Dans votre point d'entrée : enveloppez App avec withCanvas (voir README de rn-canvas).");
+    const code = fs.readFileSync(path.join(root, target.file), 'utf8');
+    const spec = manifestSpecifier(root, target.file, manifest);
+    const patched = code.includes('rn-canvas/runtime') ? code : target.layout ? patchLayout(code, target.file, spec) : patchEntry(code, target.file, spec);
+    if (patched && patched !== code) {
+      fs.writeFileSync(path.join(root, target.file), patched);
+      log(`${target.file} branché${target.layout ? ' (expo-router)' : ''}.`);
+    } else if (!patched) {
+      todo.push(`Dans ${target.file} : enveloppez le composant racine avec withCanvas (voir README de rn-canvas).`);
     }
   }
 
   // 3 bis. Metro : remplacements web des modules natifs
   const metroPath = ['metro.config.js', 'metro.config.cjs'].map((f) => path.join(root, f)).find((f) => fs.existsSync(f));
   if (!metroPath) {
-    fs.writeFileSync(
-      path.join(root, 'metro.config.js'),
-      `// withRnCanvas : dans le canevas uniquement, remplace les modules natifs sans version web.
-const { getDefaultConfig } = require('expo/metro-config');
-const { withRnCanvas } = require('rn-canvas/metro');
-
-module.exports = withRnCanvas(getDefaultConfig(__dirname));
-`,
-    );
+    fs.writeFileSync(path.join(root, 'metro.config.js'), METRO_TEMPLATE);
     log('metro.config.js créé (remplacements web).');
   } else if (!fs.readFileSync(metroPath, 'utf8').includes('rn-canvas/metro')) {
-    todo.push(`Dans ${path.basename(metroPath)} : const { withRnCanvas } = require('rn-canvas/metro'); puis module.exports = withRnCanvas(config);`);
+    const patched = patchMetro(fs.readFileSync(metroPath, 'utf8'));
+    if (patched) {
+      fs.writeFileSync(metroPath, patched);
+      log(`${path.basename(metroPath)} : withRnCanvas ajouté (remplacements web, ignoré sans le paquet).`);
+    } else {
+      todo.push(`Dans ${path.basename(metroPath)} : const { withRnCanvas } = require('rn-canvas/metro'); puis module.exports = withRnCanvas(config);`);
+    }
   }
 
   // 4. Script + dépendances web
@@ -320,7 +324,8 @@ module.exports = withRnCanvas(getDefaultConfig(__dirname));
   }
   const deps = { ...pkg.dependencies, ...pkg.devDependencies };
   const missing = ['react-dom', 'react-native-web', '@expo/metro-runtime'].filter((d) => !deps[d]);
-  if (missing.length) todo.push(`Installez le support web : ${installCommand(root, missing)}`);
+  // @expo/metro-runtime va dans les dépendances (pas de dev) : c'est ce qu'attend Expo pour le web.
+  if (missing.length) todo.push(`Installez le support web (dépendances de l'app, comme le demande Expo pour le web) : ${installCommand(root, missing)}`);
   // Un babel.config.js explicite doit pouvoir résoudre le preset Expo depuis la racine.
   if (!deps['babel-preset-expo']) todo.push(`Installez le preset Babel : ${installCommand(root, ['babel-preset-expo'], true)}`);
 

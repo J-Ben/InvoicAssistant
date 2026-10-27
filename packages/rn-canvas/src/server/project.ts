@@ -126,6 +126,16 @@ export class Project {
     return this.sourceFiles((name) => CANVAS_FILE.test(name));
   }
 
+  /** Fichiers *.canvas.tsx présents dans le projet mais hors des dossiers `include` (donc ignorés). */
+  canvasFilesOutsideInclude(): string[] {
+    const inside = new Set(this.canvasFiles());
+    const dirs = fs
+      .readdirSync(this.root, { withFileTypes: true })
+      .filter((e) => e.isDirectory() && !IGNORED_DIRS.has(e.name) && !e.name.startsWith('.'))
+      .map((e) => e.name);
+    return this.sourceFiles((name) => CANVAS_FILE.test(name), dirs).filter((f) => !inside.has(f));
+  }
+
   /** Fichiers des dossiers `include` dont le nom satisfait `accept`, triés. */
   sourceFiles(accept: (name: string) => boolean, dirs: string[] = this.config.include): string[] {
     const out: string[] = [];
@@ -713,7 +723,7 @@ export function loadConfig(root: string): CanvasConfig {
   return {
     appUrl,
     isolateStories: raw.isolateStories ?? new URL(appUrl).hostname === 'localhost',
-    include: raw.include ?? ['src', 'app', 'components'].filter((d) => fs.existsSync(path.join(root, d))),
+    include: raw.include ?? ['src', 'app', 'components', 'canvas'].filter((d) => fs.existsSync(path.join(root, d))),
     theme: raw.theme,
     runtimeConfig: raw.runtimeConfig ?? 'rn-canvas.config.tsx',
     manifest: raw.manifest ?? 'rn-canvas.stories.ts',

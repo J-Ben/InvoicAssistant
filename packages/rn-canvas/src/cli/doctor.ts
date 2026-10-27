@@ -5,6 +5,7 @@ import fs from 'node:fs';
 import { createRequire } from 'node:module';
 import path from 'node:path';
 import { CONFIG_FILE, Project, loadConfig } from '../server/project.ts';
+import { analyzeEntry } from '../server/setup.ts';
 
 export type Level = 'ok' | 'warn' | 'error';
 
@@ -28,7 +29,49 @@ const STYLE_LIBRARIES: Record<string, string> = {
 };
 
 /** Modules natifs connus pour fonctionner sur le web sans aide. */
-const WEB_OK = new Set(['react', 'react-native', 'react-dom', 'react-native-web', 'expo', 'expo-router', '@expo/metro-runtime', 'expo-sqlite']);
+const WEB_OK = new Set(['react', 'react-native', 'react-dom', 'react-native-web', 'expo', 'expo-router', '@expo/metro-runtime', 'expo-sqlite', 'react-native-vector-icons', '@expo/vector-icons']);
+/** Familles de paquets qui fonctionnent sur le web (polices d'icônes : du JS commun et un fichier de police). */
+const WEB_OK_PREFIXES = ['@react-native-vector-icons/'];
+const isWebOk = (name: string) => WEB_OK.has(name) || WEB_OK_PREFIXES.some((p) => name.startsWith(p));
+
+/** Version installée `version` dans la plage `range` (`~1.2.0`, `^1.2.0`, `1.2.3`) : sans dépendance semver. */
+export function satisfies(version: string, range: string): boolean {
+  const parse = (v: string) => v.replace(/^[~^=v\s]+/, '').split(/[.-]/).slice(0, 3).map((n) => Number.parseInt(n, 10) || 0);
+  const [a, b, c] = parse(version);
+  const [x, y, z] = parse(range);
+  const atLeast = a > x || (a === x && (b > y || (b === y && c >= z)));
+  if (range.trim().startsWith('~')) return a === x && b === y && atLeast;
+  if (range.trim().startsWith('^')) return (x > 0 ? a === x : y > 0 ? a === 0 && b === y : a === 0 && b === 0 && c === z) && atLeast;
+  return a === x && b === y && c === z;
+}
+
+/**
+ * Modules déjà remplacés sur le web par la configuration Metro du projet (resolveRequest existant) :
+ * on interroge le resolver avec un contexte factice ; s'il ne délègue pas au résolveur par défaut,
+ * le module est couvert. Configuration illisible (fonction, promesse, erreur) : aucun.
+ */
+function coveredByMetro(root: string, metroFile: string | undefined, names: string[]): Set<string> {
+  const covered = new Set<string>();
+  if (!metroFile || names.length === 0) return covered;
+  let config: { resolver?: { resolveRequest?: (context: unknown, name: string, platform: string) => unknown } } | null = null;
+  try {
+    config = createRequire(path.join(root, 'package.json'))(path.join(root, metroFile));
+  } catch {
+    return covered;
+  }
+  const resolve = config && typeof config === 'object' ? config.resolver?.resolveRequest : undefined;
+  if (typeof resolve !== 'function') return covered;
+  const fallback = { type: 'sourceFile', filePath: '__rn-canvas-default__' };
+  for (const name of names) {
+    const context = { originModulePath: path.join(root, 'index.js'), resolveRequest: () => fallback, preferNativePlatform: false, platform: 'web' };
+    try {
+      if (resolve(context, name, 'web') !== fallback) covered.add(name);
+    } catch {
+      // Le resolver attend un vrai contexte Metro : impossible à dire.
+    }
+  }
+  return covered;
+}
 
 /** rn-canvas/metro tel que le projet le résout, sinon celui de ce paquet (sources ou dist/). */
 function loadMetro(root: string): { shimsFor: (root: string) => { shims: Record<string, string> } } {
@@ -105,6 +148,30 @@ function hasWebImplementation(dir: string, pkg: Record<string, any>): boolean {
     return false;
   };
   return visit(dir, 0);
+}
+
+/** Nombre de fichiers sources qui importent chacun des paquets donnés. */
+function filesImporting(root: string, dirs: string[], packages: string[]): Map<string, number> {
+  const counts = new Map<string, number>();
+  const visit = (dir: string) => {
+    let entries: fs.Dirent[];
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const e of entries) {
+      const full = path.join(dir, e.name);
+      if (e.isDirectory()) {
+        if (!['node_modules', '.git', '.expo', 'android', 'ios', 'dist', 'build'].includes(e.name)) visit(full);
+      } else if (/\.(m?[jt]sx?)$/.test(e.name)) {
+        const code = fs.readFileSync(full, 'utf8');
+        for (const p of packages) if (new RegExp(`['"]${p.replace(/[/.]/g, '\\$&')}(/[^'"]*)?['"]`).test(code)) counts.set(p, (counts.get(p) ?? 0) + 1);
+      }
+    }
+  };
+  for (const d of new Set(dirs)) visit(path.join(root, d));
+  return counts;
 }
 
 /** Paquets importés par le code de l'app (imports, require), d'après une lecture rapide des sources. */
@@ -198,9 +265,14 @@ export function diagnose(root: string): Check[] {
   const missingWeb = webDeps.filter((d) => !deps[d]);
   if (missingWeb.length) add('error', `Support web absent : ${missingWeb.join(', ')}`, { fix: expoInstall(missingWeb) });
   else {
-    const mismatched = webDeps.filter((d) => bundled[d] && deps[d] !== bundled[d] && !deps[d].endsWith(bundled[d].replace(/^[~^]/, '')));
+    // Version installée comparée à la plage attendue (^0.21.2 installé en 0.21.2 satisfait ~0.21.0).
+    const installedVersion = (d: string) => readJson(path.join(root, 'node_modules', d, 'package.json'))?.version as string | undefined;
+    const mismatched = webDeps.filter((d) => {
+      const version = installedVersion(d);
+      return bundled[d] && version && !satisfies(version, bundled[d]);
+    });
     if (mismatched.length) {
-      add('warn', `Versions web différentes de celles attendues par Expo : ${mismatched.map((d) => `${d} ${deps[d]} (attendu ${bundled[d]})`).join(', ')}`, { fix: expoInstall(mismatched) });
+      add('warn', `Versions web différentes de celles attendues par Expo : ${mismatched.map((d) => `${d} ${installedVersion(d)} (attendu ${bundled[d]})`).join(', ')}`, { fix: expoInstall(mismatched) });
     } else add('ok', 'Support web installé (react-dom, react-native-web, @expo/metro-runtime)');
   }
 
@@ -228,15 +300,19 @@ export function diagnose(root: string): Check[] {
     });
   } else add('ok', `Remplacements web actifs (${metroFile})`);
 
-  // Point d'entrée
+  // Point d'entrée : mise en page d'expo-router, sinon l'entrée (ou le composant qu'elle enregistre).
   const usesRouter = Boolean(deps['expo-router']);
-  const layout = ['app/_layout.tsx', 'app/_layout.jsx', 'app/_layout.js', 'src/app/_layout.tsx'].find((f) => exists(root, f));
-  const entry = [pkg.main, 'index.ts', 'index.tsx', 'index.js', 'App.tsx', 'App.js'].filter(Boolean).find((f: string) => exists(root, f) && read(root, f).includes('rn-canvas/runtime'));
+  const layout = ['app/_layout.tsx', 'app/_layout.jsx', 'app/_layout.js', 'src/app/_layout.tsx', 'src/app/_layout.jsx'].find((f) => exists(root, f));
   if (usesRouter && layout) {
     if (read(root, layout).includes('rn-canvas/runtime')) add('ok', `${layout} branché (expo-router)`);
     else add('error', `${layout} n'est pas branché`, { fix: 'npx rn-canvas init, ou enveloppez la mise en page racine avec withCanvas (voir README).' });
-  } else if (entry) add('ok', `Point d'entrée branché (${entry})`);
-  else add('error', "Point d'entrée non branché", { fix: 'npx rn-canvas init, ou enveloppez App avec withCanvas (voir README).' });
+  } else {
+    const entry = analyzeEntry(root);
+    const wired = entry && (entry.patched || (entry.componentFile && read(root, entry.componentFile).includes('rn-canvas/runtime')));
+    if (wired) add('ok', `Point d'entrée branché (${entry!.patched ? entry!.file : entry!.componentFile})`);
+    else if (!entry) add('error', "Point d'entrée introuvable", { fix: 'Renseignez "main" dans package.json, ou créez index.js (voir README).' });
+    else add('error', `Point d'entrée non branché (${entry.file})`, { fix: 'npx rn-canvas init, ou enveloppez le composant racine avec withCanvas (voir README).' });
+  }
 
   // Écrans
   if (!exists(root, CONFIG_FILE)) add('warn', `Pas de ${CONFIG_FILE}`, { fix: 'npx rn-canvas init' });
@@ -247,6 +323,14 @@ export function diagnose(root: string): Check[] {
   const inApp = files.filter((f) => f.startsWith('app/'));
   if (usesRouter && inApp.length) add('error', `Fichiers canvas dans app/ : expo-router en fait des routes (${inApp.join(', ')})`, { fix: 'Déplacez-les dans canvas/ et ajoutez "canvas" à "include" dans rn-canvas.json.' });
   if (files.length && !exists(root, loadConfig(root).manifest)) add('warn', 'Manifeste des écrans absent', { fix: 'npx rn-canvas generate' });
+  const outside = project.canvasFilesOutsideInclude();
+  if (outside.length) {
+    const dirs = [...new Set(outside.map((f) => f.split('/')[0]))];
+    add('warn', `${outside.length} fichier(s) *.canvas.tsx hors des dossiers « include » : ignorés`, {
+      detail: `Dossiers scannés : ${project.config.include.join(', ') || '(aucun)'} ; trouvés dans : ${dirs.join(', ')}.`,
+      fix: `Ajoutez ${dirs.map((d) => `"${d}"`).join(', ')} à "include" dans ${CONFIG_FILE}.`,
+    });
+  }
 
   // Modules natifs
   let shimmed: string[] = [];
@@ -257,6 +341,7 @@ export function diagnose(root: string): Check[] {
     shimmed = Object.keys(readJson(path.join(root, CONFIG_FILE))?.shims ?? {});
   }
   const replaced: string[] = [];
+  const candidates: string[] = [];
   const risky: string[] = [];
   const imported = importedPackages(root, [...new Set([...loadConfig(root).include, 'app', 'src', 'components'])]);
   for (const name of Object.keys(pkg.dependencies ?? {})) {
@@ -264,18 +349,21 @@ export function diagnose(root: string): Check[] {
     if (!imported.has(name)) continue;
     const dir = path.join(root, 'node_modules', name);
     const depPkg = readJson(path.join(dir, 'package.json'));
-    if (!depPkg || WEB_OK.has(name)) continue;
+    if (!depPkg || isWebOk(name)) continue;
     if (shimmed.includes(name)) {
       replaced.push(name);
       continue;
     }
-    if (isNative(dir, depPkg) && !hasWebImplementation(dir, depPkg)) risky.push(name);
+    if (isNative(dir, depPkg) && !hasWebImplementation(dir, depPkg)) candidates.push(name);
   }
-  if (replaced.length) add('ok', `Remplacés dans le canevas : ${replaced.join(', ')}`);
+  // Déjà remplacés sur le web par le resolveRequest du metro.config.js du projet.
+  const byMetro = coveredByMetro(root, metroFile, candidates);
+  for (const name of candidates) (byMetro.has(name) ? replaced : risky).push(name);
+  if (replaced.length) add('ok', `Remplacés dans le canevas : ${replaced.join(', ')}${byMetro.size ? ` (dont ${[...byMetro].join(', ')} par ${metroFile})` : ''}`);
   for (const name of risky) {
     add('warn', `${name} : module natif sans version web`, {
       detail: "S'il est appelé au chargement d'un écran, l'écran plantera dans le canevas.",
-      fix: `Neutralisez-le sur le web : remplacement dans ${CONFIG_FILE} ("shims": { "${name}": "./canvas/shims/${name.replace(/[@/]/g, '_')}.js" }), fichier .web.ts, ou Platform.OS === 'web'.`,
+      fix: `npx rn-canvas shim ${name} (crée un remplacement inoffensif et l'ajoute à ${CONFIG_FILE}), ou fichier .web.ts, ou Platform.OS === 'web'.`,
     });
   }
   if (deps['expo-sqlite']) {
@@ -285,9 +373,12 @@ export function diagnose(root: string): Check[] {
   }
 
   // Styles
-  const styleLibs = [...new Set(Object.keys(STYLE_LIBRARIES).filter((d) => deps[d]).map((d) => STYLE_LIBRARIES[d]))];
+  const styleLibs = Object.keys(STYLE_LIBRARIES).filter((d) => deps[d]);
   if (styleLibs.length) {
-    add('warn', `Styles avec ${styleLibs.join(', ')} : édition des styles limitée`, {
+    const counts = filesImporting(root, [...new Set([...loadConfig(root).include, 'app', 'src', 'components'])], styleLibs);
+    const labels = [...new Set(styleLibs.map((d) => STYLE_LIBRARIES[d]))];
+    const total = styleLibs.reduce((n, d) => n + (counts.get(d) ?? 0), 0);
+    add('warn', `Styles avec ${labels.join(', ')} : édition des styles limitée (${total} fichier(s) concerné(s))`, {
       detail: "L'éditeur modifie les styles écrits avec StyleSheet ou en ligne ; ces styles-là s'affichent mais restent à modifier dans le code.",
     });
   }
