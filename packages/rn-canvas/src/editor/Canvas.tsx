@@ -26,8 +26,31 @@ const LABEL = 28;
 /** Les écrans sont rangés en grille plutôt qu'en une seule ligne interminable. */
 const COLUMNS = 4;
 const VIEW_KEY = 'rn-canvas:view';
+const POSITIONS_KEY = 'rn-canvas:positions';
+/** Pas de la grille de points du fond : un écran déplacé s'y aligne. */
+const SNAP = 20;
 
 type View = { x: number; y: number; zoom: number };
+type Point = { x: number; y: number };
+
+function readPositions(appUrl: string): Record<string, Point> {
+  try {
+    const all = JSON.parse(localStorage.getItem(POSITIONS_KEY) ?? '{}');
+    return all?.[appUrl] ?? {};
+  } catch {
+    return {};
+  }
+}
+
+function writePositions(appUrl: string, positions: Record<string, Point>) {
+  try {
+    const all = JSON.parse(localStorage.getItem(POSITIONS_KEY) ?? '{}') ?? {};
+    all[appUrl] = positions;
+    localStorage.setItem(POSITIONS_KEY, JSON.stringify(all));
+  } catch {
+    // Stockage indisponible : les positions valent pour la session.
+  }
+}
 
 function readView(): View | null {
   try {
@@ -59,7 +82,10 @@ interface Props {
   empty: boolean;
 }
 
-/** Canevas infini : déplacement (glisser le fond, molette), zoom (Ctrl/⌘ + molette, boutons). */
+/**
+ * Canevas infini : déplacement (glisser le fond, molette), zoom (Ctrl/⌘ + molette, boutons).
+ * Un écran se déplace en glissant son nom ; sa position est mémorisée (bouton ⊞ : grille d'origine).
+ */
 export function Canvas({ appUrl, isolateStories, stories, allStories, device, activeStory, errors, loaded, generations, flows, frames, onActivate, empty }: Props) {
   const viewport = useRef<HTMLDivElement>(null);
   // Vue mémorisée : ni un rechargement ni l'ajout / le masquage d'un écran ne la réinitialisent.
@@ -69,32 +95,90 @@ export function Canvas({ appUrl, isolateStories, stories, allStories, device, ac
   const drag = useRef<{ x: number; y: number; vx: number; vy: number } | null>(null);
 
   const columns = Math.max(1, Math.min(COLUMNS, stories.length));
-  const rows = Math.ceil(stories.length / columns);
   const cellWidth = device.width + GAP;
   const cellHeight = device.height + LABEL + GAP;
-  const contentWidth = columns * cellWidth - GAP;
-  const contentHeight = rows * cellHeight - GAP;
   const pending = stories.filter((s) => !loaded[s.id]).length;
   const gridIndex = useMemo(() => new Map(stories.map((s, i) => [s.id, i])), [stories]);
+
+  // Positions choisies à la main (coin haut gauche, nom compris) ; les autres écrans restent en grille.
+  const [positions, setPositions] = useState<Record<string, Point>>(() => readPositions(appUrl));
+  useEffect(() => writePositions(appUrl, positions), [appUrl, positions]);
+  const positionOf = useCallback(
+    (id: string): Point | null => {
+      const i = gridIndex.get(id);
+      if (i === undefined) return null;
+      return positions[id] ?? { x: (i % columns) * cellWidth, y: Math.floor(i / columns) * cellHeight };
+    },
+    [gridIndex, positions, columns, cellWidth, cellHeight],
+  );
+
+  // Emprise des écrans affichés, pour « tout afficher » et le calque des flèches.
+  const bounds = useMemo(() => {
+    const points = stories.map((s) => positionOf(s.id)).filter((p): p is Point => p !== null);
+    if (points.length === 0) return { x: 0, y: 0, width: 0, height: 0 };
+    const x = Math.min(...points.map((p) => p.x));
+    const y = Math.min(...points.map((p) => p.y));
+    return { x, y, width: Math.max(...points.map((p) => p.x)) + device.width - x, height: Math.max(...points.map((p) => p.y)) + device.height + LABEL - y };
+  }, [stories, positionOf, device]);
+
+  // Écran en cours de déplacement (glissé par son nom).
+  const moving = useRef<{ id: string; startX: number; startY: number; from: Point; moved: boolean } | null>(null);
+  const [movingId, setMovingId] = useState<string | null>(null);
+  const justMoved = useRef(false);
 
   const [hovered, setHovered] = useState<string | null>(null);
   const flowLayout = useMemo(() => {
     if (!flows) return null;
-    const index = new Map(stories.map((s, i) => [s.id, i]));
     return layoutFlows(flows, (id) => {
-      const i = index.get(id);
-      if (i === undefined) return null;
-      return { x: (i % columns) * cellWidth, y: Math.floor(i / columns) * cellHeight + LABEL, width: device.width, height: device.height };
+      const p = positionOf(id);
+      return p ? { x: p.x, y: p.y + LABEL, width: device.width, height: device.height } : null;
     });
-  }, [flows, stories, columns, cellWidth, cellHeight, device]);
+  }, [flows, positionOf, device]);
 
   const fit = useCallback(() => {
     const el = viewport.current;
     if (!el || stories.length === 0) return;
     const { width, height } = el.getBoundingClientRect();
-    const zoom = Math.min(1, (width - PADDING * 2) / contentWidth, (height - PADDING * 2) / contentHeight);
-    setView({ zoom, x: (width - contentWidth * zoom) / 2, y: Math.max(PADDING / 2, (height - contentHeight * zoom) / 2) });
-  }, [stories.length, contentWidth, contentHeight]);
+    const zoom = Math.min(1, (width - PADDING * 2) / bounds.width, (height - PADDING * 2) / bounds.height);
+    setView({ zoom, x: (width - bounds.width * zoom) / 2 - bounds.x * zoom, y: Math.max(PADDING / 2, (height - bounds.height * zoom) / 2) - bounds.y * zoom });
+  }, [stories.length, bounds]);
+
+  // Retour à la grille d'origine, puis cadrage sur l'ensemble.
+  const [regridded, setRegridded] = useState(0);
+  const resetPositions = () => {
+    setPositions({});
+    setRegridded((n) => n + 1);
+  };
+  useEffect(() => {
+    if (regridded) fit();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [regridded]);
+
+  const startMove = (e: React.PointerEvent, id: string) => {
+    if (e.button !== 0) return;
+    const from = positionOf(id);
+    if (!from) return;
+    moving.current = { id, startX: e.clientX, startY: e.clientY, from, moved: false };
+    (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+  };
+  const continueMove = (e: React.PointerEvent) => {
+    const m = moving.current;
+    if (!m) return;
+    const dx = (e.clientX - m.startX) / view.zoom;
+    const dy = (e.clientY - m.startY) / view.zoom;
+    if (!m.moved && Math.hypot(dx, dy) * view.zoom < 4) return;
+    if (!m.moved) {
+      m.moved = true;
+      setMovingId(m.id);
+    }
+    const snap = (v: number) => (e.altKey ? v : Math.round(v / SNAP) * SNAP);
+    setPositions((p) => ({ ...p, [m.id]: { x: snap(m.from.x + dx), y: snap(m.from.y + dy) } }));
+  };
+  const endMove = () => {
+    justMoved.current = Boolean(moving.current?.moved);
+    moving.current = null;
+    setMovingId(null);
+  };
 
   // Première ouverture : cadrage sur la première rangée d'écrans (lisible) ; ensuite, la vue mémorisée.
   const fitFirstRow = useCallback(() => {
@@ -186,7 +270,7 @@ export function Canvas({ appUrl, isolateStories, stories, allStories, device, ac
 
   return (
     <main
-      className={`canvas ${panning ? 'panning' : ''}`}
+      className={`canvas ${panning || movingId ? 'panning' : ''}`}
       ref={viewport}
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
@@ -204,16 +288,27 @@ export const Default = { props: {} };`}</pre>
       )}
       <div className="world" style={{ transform: `translate(${view.x}px, ${view.y}px) scale(${view.zoom})` }}>
         {allStories.map((story) => {
-          const i = gridIndex.get(story.id);
+          const p = positionOf(story.id);
           return (
             <section
               key={story.id}
-              className={`artboard ${activeStory === story.id ? 'active' : ''}`}
-              style={i === undefined ? { display: 'none', width: device.width } : { left: (i % columns) * cellWidth, top: Math.floor(i / columns) * cellHeight, width: device.width }}
+              className={`artboard ${activeStory === story.id ? 'active' : ''} ${movingId === story.id ? 'moving' : ''}`}
+              style={p === null ? { display: 'none', width: device.width } : { left: p.x, top: p.y, width: device.width }}
               onMouseEnter={() => setHovered(story.id)}
               onMouseLeave={() => setHovered((h) => (h === story.id ? null : h))}
             >
-              <button className="artboard-label" onClick={() => onActivate(story.id)} title={story.id}>
+              <button
+                className="artboard-label"
+                onPointerDown={(e) => startMove(e, story.id)}
+                onPointerMove={continueMove}
+                onPointerUp={endMove}
+                onPointerCancel={endMove}
+                onClick={() => {
+                  if (justMoved.current) justMoved.current = false;
+                  else onActivate(story.id);
+                }}
+                title={`${story.id}\nGlisser pour déplacer l'écran (Alt : sans aimantation)`}
+              >
                 {story.file.split('/').pop()!.replace(/\.canvas\.\w+$/, '')} · {story.title}
               </button>
               <div className="frame" style={{ width: device.width, height: device.height }}>
@@ -241,7 +336,7 @@ export const Default = { props: {} };`}</pre>
             </section>
           );
         })}
-        {flowLayout && <FlowLayer layout={flowLayout} width={contentWidth} height={contentHeight + LABEL} zoom={view.zoom} focus={hovered} />}
+        {flowLayout && <FlowLayer layout={flowLayout} width={bounds.x + bounds.width} height={bounds.y + bounds.height} zoom={view.zoom} focus={hovered} />}
       </div>
       {pending > 0 && (
         <div className="canvas-progress" role="status">
@@ -254,6 +349,9 @@ export const Default = { props: {} };`}</pre>
         <button onClick={() => zoomAt(1 / 1.2, ...center())} aria-label="Dézoomer">−</button>
         <button onClick={fit} title="Tout afficher">{Math.round(view.zoom * 100)} %</button>
         <button onClick={() => zoomAt(1.2, ...center())} aria-label="Zoomer">+</button>
+        <button onClick={resetPositions} disabled={Object.keys(positions).length === 0} title="Remettre les écrans dans la grille d'origine" aria-label="Repositionner les écrans">
+          ⊞
+        </button>
       </div>
     </main>
   );

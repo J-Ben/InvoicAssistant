@@ -112,6 +112,7 @@ Ouvrez **http://localhost:7007**.
 - **Clic droit** sur un élément (dans l'écran ou dans les calques) : Dupliquer, Copier le code JSX, Copier l'emplacement, Ouvrir dans VS Code, Sélectionner le parent, Supprimer.
 - **Dégradés** (`expo-linear-gradient`, `react-native-linear-gradient`) : la section « Fond dégradé » apparaît pour un `LinearGradient` ou pour un élément dont c'est le calque de fond (`absoluteFill`). Aperçu, couleurs réellement rendues (même calculées), modification de chaque couleur (valeur ou jeton du thème), ajout / retrait, direction.
 - **Version** : affichée à côté du nom du projet, pour vérifier quelle version de l'éditeur tourne.
+- **Disposition** : glissez un écran par son nom (au-dessus du cadre) pour le placer où vous voulez ; il s'aligne sur la grille de points (Alt : placement libre). Les positions sont mémorisées ; le bouton ⊞ remet la grille d'origine.
 - **Zoom** : ⌘/Ctrl + molette (ou pincement du trackpad), y compris au-dessus d'un écran ; ⌘/Ctrl + / − ; ⌘/Ctrl 0 ou Maj 1 pour tout afficher ; Maj 0 pour 100 %. La vue est mémorisée : ni un rechargement ni l'affichage / le masquage d'un écran ne la changent.
 - **Navigation** : un écran du canevas reste affiché seul. Une redirection ou un `router.push` y est ignoré et signalé par une notification.
 - **Un seul onglet** : les écrans partagent leurs bases de données d'un onglet à l'autre ; un deuxième onglet de l'éditeur propose « Utiliser cet onglet ». Avec Brave, si les écrans affichent des erreurs de stockage, désactivez les Shields pour `localhost`.
