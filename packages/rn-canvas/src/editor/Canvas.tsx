@@ -94,6 +94,8 @@ interface Props {
   device: Device;
   activeStory: string | null;
   errors: Record<string, string>;
+  /** Démarrage de l'app dans chaque écran (horodatage du message « ready »). */
+  readyAt?: Record<string, number>;
   /** Appels réseau coupés par écran (voir `network` dans rn-canvas.config.tsx). */
   blocked?: Record<string, { count: number; hosts: string[] }>;
   /** Écrans affichés (premier rendu reçu) ; les autres montrent un indicateur de chargement. */
@@ -136,6 +138,13 @@ interface Props {
  */
 /** Écrans chargés en parallèle : chacun charge l'app entière dans son iframe. */
 const MAX_PARALLEL_LOADS = 4;
+/** Durée supposée du premier écran, avant d'en avoir mesuré un (estimation du pourcentage). */
+const FIRST_LOAD_ESTIMATE = 8000;
+
+/** « 2,4 s » */
+export function seconds(ms: number): string {
+  return `${(ms / 1000).toLocaleString('fr-FR', { minimumFractionDigits: 1, maximumFractionDigits: 1 })} s`;
+}
 const LOAD_TIMEOUT = 30_000;
 /** Écrans montés au plus (chacun garde une copie de l'app en mémoire). */
 const MAX_LIVE = 12;
@@ -147,7 +156,7 @@ const SETTLE_DELAY = 300;
 
 export function Canvas(props: Props) {
   const { appUrl, isolateStories, stories, allStories, device, activeStory, errors, loaded, generations, flows, frames, onActivate, onUnload, empty, reveal, children } = props;
-  const { blocked = {} } = props;
+  const { blocked = {}, readyAt = {} } = props;
   const { page, onChangePage, onCreateParcours, flowMode, onFlowMode, isolate, onBackgroundClick, keepLoaded = 24, loadAll = false, showBoardTools = true, showLabels = true } = props;
   const viewport = useRef<HTMLDivElement>(null);
   // Vue mémorisée par page : ni un rechargement ni l'ajout / le masquage d'un écran ne la réinitialisent.
@@ -261,8 +270,8 @@ export function Canvas(props: Props) {
   // Compteur : écrans montés pas encore affichés.
   const pending = [...live].filter((id) => !loaded[id]).length;
 
-  // Parmi les écrans montés, au plus MAX_PARALLEL_LOADS en cours de chargement à la fois. Un écran qui ne
-  // répond pas libère sa place au bout de LOAD_TIMEOUT.
+  // « Charger tous les écrans » : tous à la fois (le plus rapide). Sinon, au plus MAX_PARALLEL_LOADS en
+  // cours de chargement à la fois. Un écran qui ne répond pas libère sa place au bout de LOAD_TIMEOUT.
   const [admitted, setAdmitted] = useState<Record<string, number>>({});
   useEffect(() => {
     // Sortis de la vue : démontés, et leur état de chargement repart de zéro.
@@ -274,7 +283,7 @@ export function Canvas(props: Props) {
     }
     const now = Date.now();
     const inFlight = Object.entries(admitted).filter(([id, at]) => !loaded[id] && !errors[id] && now - at < LOAD_TIMEOUT).length;
-    const free = MAX_PARALLEL_LOADS - inFlight;
+    const free = (loadAll ? Infinity : MAX_PARALLEL_LOADS) - inFlight;
     // `live` est déjà trié du plus proche au plus loin du centre.
     const waiting = [...live].filter((id) => !(id in admitted));
     if (free > 0 && waiting.length) {
@@ -285,7 +294,57 @@ export function Canvas(props: Props) {
     // File pleine : réexaminer quand un délai de garde expire.
     const timer = window.setTimeout(() => setAdmitted((a) => ({ ...a })), 5000);
     return () => window.clearTimeout(timer);
-  }, [admitted, live, loaded, errors, onUnload]);
+  }, [admitted, live, loaded, errors, onUnload, loadAll]);
+
+  // Durée de chargement de chaque écran (de son admission à son affichage), et bilan d'une vague de
+  // chargements. Le pourcentage d'un écran en cours est estimé : l'éditeur ne voit pas le
+  // téléchargement dans le cadre, seulement ses étapes (app démarrée, écran affiché) et la durée des
+  // écrans déjà chargés.
+  const [loadTimes, setLoadTimes] = useState<Record<string, number>>({});
+  useEffect(() => {
+    const now = Date.now();
+    const done = Object.keys(loaded).filter((id) => id in admitted && !(id in loadTimes));
+    const stale = Object.keys(loadTimes).filter((id) => !(id in admitted));
+    if (!done.length && !stale.length) return;
+    setLoadTimes((times) => {
+      const next = Object.fromEntries(Object.entries(times).filter(([id]) => id in admitted));
+      for (const id of done) next[id] = now - admitted[id];
+      return next;
+    });
+  }, [loaded, admitted, loadTimes]);
+  const typical = useMemo(() => {
+    const values = Object.values(loadTimes);
+    return values.length ? values.reduce((a, b) => a + b, 0) / values.length : FIRST_LOAD_ESTIMATE;
+  }, [loadTimes]);
+  const [now, setNow] = useState(Date.now());
+  useEffect(() => {
+    if (pending === 0) return;
+    const timer = window.setInterval(() => setNow(Date.now()), 250);
+    return () => window.clearInterval(timer);
+  }, [pending > 0]);
+  const percentOf = (id: string): number => {
+    if (loaded[id]) return 100;
+    if (!(id in admitted)) return 0;
+    const estimate = Math.min(95, ((now - admitted[id]) / typical) * 100);
+    return Math.floor(readyAt[id] ? Math.max(80, Math.min(99, estimate)) : Math.min(79, estimate));
+  };
+  const batch = useRef<number | null>(null);
+  const [summary, setSummary] = useState<{ count: number; ms: number; average: number } | null>(null);
+  useEffect(() => {
+    if (pending > 0) {
+      if (batch.current === null) batch.current = Date.now();
+      setSummary(null);
+      return;
+    }
+    if (batch.current === null) return;
+    const times = Object.values(loadTimes);
+    const count = [...live].filter((id) => loaded[id]).length;
+    setSummary({ count, ms: Date.now() - batch.current, average: times.length ? times.reduce((a, b) => a + b, 0) / times.length : 0 });
+    batch.current = null;
+    const timer = window.setTimeout(() => setSummary(null), 10_000);
+    return () => window.clearTimeout(timer);
+  }, [pending > 0]);
+  const overall = live.size ? Math.floor([...live].reduce((sum, id) => sum + percentOf(id), 0) / live.size) : 100;
 
   // Emprise des écrans affichés, pour « tout afficher » et le calque des flèches.
   const bounds = useMemo(() => {
@@ -666,6 +725,7 @@ export const Default = { props: {} };`}</pre>
                 title={`${story.id}\nGlisser pour déplacer l'écran (Alt : sans aimantation)`}
               >
                 {story.file.split('/').pop()!.replace(/\.canvas\.\w+$/, '')} · {story.title}
+                {loadTimes[story.id] !== undefined && <span className="load-time"> · {seconds(loadTimes[story.id])}</span>}
               </button>
               <div className="frame" style={{ width: device.width, height: device.height }}>
                 {story.id in admitted && (
@@ -686,7 +746,19 @@ export const Default = { props: {} };`}</pre>
                   !loaded[story.id] && (
                     <div className="frame-loading" role="status">
                       <span className="spinner" />
-                      {story.id in admitted ? "Chargement de l'écran…" : 'En attente…'}
+                      {story.id in admitted ? (
+                        <>
+                          <span>
+                            {readyAt[story.id] ? "Affichage de l'écran…" : "Chargement de l'app…"} {percentOf(story.id)} %
+                          </span>
+                          <span className="frame-progress" title="Estimation : étapes du chargement et durée des écrans déjà chargés">
+                            <span style={{ width: `${percentOf(story.id)}%` }} />
+                          </span>
+                          <span className="muted small">{seconds(now - admitted[story.id])}</span>
+                        </>
+                      ) : (
+                        'En attente…'
+                      )}
                     </div>
                   )
                 )}
@@ -727,7 +799,12 @@ export const Default = { props: {} };`}</pre>
       {pending > 0 && (
         <div className="canvas-progress" role="status">
           <span className="spinner" />
-          Chargement des écrans{loadAll ? '' : ' de la vue'} · {live.size - pending}/{live.size}
+          Chargement des écrans{loadAll ? '' : ' de la vue'} · {live.size - pending}/{live.size} · {overall} %{batch.current !== null && <> · {seconds(now - batch.current)}</>}
+        </div>
+      )}
+      {pending === 0 && summary && summary.count > 0 && (
+        <div className="canvas-progress done" role="status">
+          ✓ {summary.count} écran{summary.count > 1 ? 's' : ''} chargé{summary.count > 1 ? 's' : ''} en {seconds(summary.ms)} · {seconds(summary.average)} en moyenne par écran
         </div>
       )}
       {flowLayout && flowView && <FlowLegend layout={flowLayout} view={flowView} mode={page.groups.length ? flowMode : 'all'} onMode={onFlowMode} hasGroups={page.groups.length > 0} parcours={page.stories !== null} />}

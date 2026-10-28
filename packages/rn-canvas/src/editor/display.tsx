@@ -13,7 +13,7 @@ export interface Display {
   /** Écrans gardés chargés hors de la vue (0 : tous) ; au-delà, les moins récemment vus sont libérés. */
   keepLoaded: number;
   /**
-   * Tous les écrans cochés se chargent (4 à la fois, les plus proches de la vue d'abord) et restent
+   * Tous les écrans cochés se chargent (tous à la fois, les plus proches de la vue d'abord) et restent
    * chargés. Désactivé : seuls les écrans autour de la vue se chargent (gros projets).
    */
   loadAll: boolean;

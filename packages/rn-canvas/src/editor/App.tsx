@@ -65,6 +65,8 @@ export function App() {
   const [device, setDevice] = useState<Device>(DEVICES[0]);
   const [trees, setTrees] = useState<Record<string, LayerNode[]>>({});
   const [storyErrors, setStoryErrors] = useState<Record<string, string>>({});
+  // Démarrage de l'app dans chaque écran (message « ready ») : étape du chargement affichée sur le cadre.
+  const [readyAt, setReadyAt] = useState<Record<string, number>>({});
   // Appels réseau coupés par écran (hôtes distincts), affichés sur son cadre.
   const [blocked, setBlocked] = useState<Record<string, { count: number; hosts: string[] }>>({});
   const [loaded, setLoaded] = useState<Record<string, LoadState>>({});
@@ -82,6 +84,7 @@ export function App() {
     window.clearTimeout(graceTimers.current.get(id));
     graceTimers.current.delete(id);
     setLoaded(({ [id]: _, ...rest }) => rest);
+    setReadyAt(({ [id]: _, ...rest }) => rest);
   }, []);
   // Écrans passés sur un stockage neuf ; mémorisé pour retrouver leurs données à la session suivante.
   const [generations, setGenerations] = useState<Record<string, number>>(readGenerations);
@@ -210,6 +213,7 @@ export function App() {
       if (data?.source !== 'rn-canvas') return;
       switch (data.type) {
         case 'ready':
+          setReadyAt((r) => ({ ...r, [data.story]: Date.now() }));
           send(data.story, { type: 'mode', mode: modeRef.current });
           setStoryErrors(({ [data.story]: _, ...rest }) => rest);
           // Un écran qui reste vide (rendu null) ne doit pas garder l'indicateur indéfiniment.
@@ -729,6 +733,7 @@ export function App() {
           activeStory={activeStory}
           errors={storyErrors}
           blocked={blocked}
+          readyAt={readyAt}
           loaded={loaded}
           generations={generations}
           flows={showFlows ? { links: flows, rects: flowRects } : null}

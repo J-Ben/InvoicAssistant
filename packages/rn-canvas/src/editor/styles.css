@@ -158,7 +158,7 @@ textarea { resize: vertical; }
 .frame-loading .spinner { width: 28px; height: 28px; border-width: 3px; }
 .spinner { display: inline-block; width: 14px; height: 14px; border: 2px solid var(--border); border-top-color: var(--accent); border-radius: 50%; animation: rnc-spin 0.8s linear infinite; flex: none; }
 @keyframes rnc-spin { to { transform: rotate(360deg); } }
-.canvas-progress { position: absolute; top: 12px; left: 50%; transform: translateX(-50%); display: flex; align-items: center; gap: 8px; padding: 6px 12px; border-radius: 999px; background: var(--panel); border: 1px solid var(--border); color: var(--muted); font-size: 12px; box-shadow: 0 4px 12px rgb(0 0 0 / 0.12); pointer-events: none; }
+.canvas-progress { position: absolute; top: 58px; z-index: 6; white-space: nowrap; left: 50%; transform: translateX(-50%); display: flex; align-items: center; gap: 8px; padding: 6px 12px; border-radius: 999px; background: var(--panel); border: 1px solid var(--border); color: var(--muted); font-size: 12px; box-shadow: 0 4px 12px rgb(0 0 0 / 0.12); pointer-events: none; }
 .frame-empty { position: absolute; left: 12px; right: 12px; bottom: 12px; padding: 10px; border-radius: 8px; background: var(--panel); border: 1px solid var(--border); color: var(--muted); font-size: 12px; }
 .frame-error { position: absolute; left: 12px; right: 12px; bottom: 12px; padding: 10px; border-radius: 8px; background: var(--error-soft); color: var(--error); font-size: 12px; }
 .canvas-empty { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; color: var(--muted); cursor: default; }
@@ -418,3 +418,9 @@ textarea { resize: vertical; }
 
 .display-keep { align-items: center; justify-content: space-between; cursor: default; }
 .display-keep select { background: var(--input); border: 1px solid var(--border); border-radius: 6px; padding: 2px 4px; }
+
+/* Temps et progression du chargement des écrans. */
+.load-time { color: var(--muted); font-weight: 400; }
+.frame-progress { display: block; width: 60%; height: 4px; border-radius: 2px; background: var(--border); overflow: hidden; }
+.frame-progress > span { display: block; height: 100%; background: var(--accent); transition: width 0.25s linear; }
+.canvas-progress.done { color: var(--muted); }
