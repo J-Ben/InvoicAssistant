@@ -73,6 +73,9 @@ test('projet branché : tout est vert', () => {
       'metro.config.js': "const { withRnCanvas } = require('rn-canvas/metro');",
       'rn-canvas.json': {},
       'src/A.canvas.tsx': 'export const A = {};',
+      // Dossiers Atomic Design : la création de composants sait où les ranger.
+      'src/components/atoms/Button.tsx': 'export function Button() { return null; }',
+      'src/components/molecules/Field.tsx': 'export function Field() { return null; }',
       'rn-canvas.stories.ts': '',
     },
   );

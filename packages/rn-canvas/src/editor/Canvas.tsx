@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import type { BoardGroup, BoardNote, BoardPage, StoryEntry } from '../shared/protocol.ts';
+import { createPortal } from 'react-dom';
+import type { BoardGroup, BoardNote, BoardPage, SnapshotInfo, StoryEntry } from '../shared/protocol.ts';
 import { type FlowData, FlowLayer, FlowLegend, type FlowMode, layoutFlows, viewFlows } from './Flows.tsx';
 import { storyUrl } from './urls.ts';
 import { PALETTE_GAP, PALETTE_WIDTH, paletteSide } from './palette.ts';
@@ -12,20 +13,44 @@ export interface Device {
   label: string;
   width: number;
   height: number;
+  /** Famille, pour ranger le menu des appareils. */
+  group: 'iPhone' | 'Android' | 'Pliables' | 'Tablettes';
 }
 
+/**
+ * Tailles d'écran en points (ce que voit la mise en page), en portrait. « ≈ » : taille approchée,
+ * calculée depuis la définition et la densité de l'écran, faute de valeur publiée par le fabricant.
+ */
 export const DEVICES: Device[] = [
-  { id: 'iphone-15', label: 'iPhone 15', width: 393, height: 852 },
-  { id: 'iphone-se', label: 'iPhone SE', width: 375, height: 667 },
-  { id: 'pixel-8', label: 'Pixel 8', width: 412, height: 915 },
-  { id: 'ipad-mini', label: 'iPad mini', width: 744, height: 1133 },
+  { id: 'iphone-se', label: 'iPhone SE', width: 375, height: 667, group: 'iPhone' },
+  { id: 'iphone-13-mini', label: 'iPhone 13 mini', width: 375, height: 812, group: 'iPhone' },
+  { id: 'iphone-15', label: 'iPhone 15', width: 393, height: 852, group: 'iPhone' },
+  { id: 'iphone-16-pro', label: 'iPhone 16 Pro', width: 402, height: 874, group: 'iPhone' },
+  { id: 'iphone-15-plus', label: 'iPhone 15 Plus', width: 430, height: 932, group: 'iPhone' },
+  { id: 'iphone-16-pro-max', label: 'iPhone 16 Pro Max', width: 440, height: 956, group: 'iPhone' },
+  { id: 'galaxy-s24', label: 'Galaxy S24', width: 360, height: 780, group: 'Android' },
+  { id: 'galaxy-s24-ultra', label: 'Galaxy S24 Ultra', width: 384, height: 824, group: 'Android' },
+  { id: 'pixel-8', label: 'Pixel 8', width: 412, height: 915, group: 'Android' },
+  { id: 'galaxy-z-flip-5', label: 'Galaxy Z Flip 5 ≈', width: 412, height: 1006, group: 'Pliables' },
+  { id: 'galaxy-z-fold-5', label: 'Galaxy Z Fold 5 (plié)', width: 344, height: 882, group: 'Pliables' },
+  { id: 'galaxy-z-fold-5-open', label: 'Galaxy Z Fold 5 (déplié) ≈', width: 690, height: 829, group: 'Pliables' },
+  { id: 'ipad-mini', label: 'iPad mini', width: 744, height: 1133, group: 'Tablettes' },
+  { id: 'ipad', label: 'iPad / iPad Air 11"', width: 820, height: 1180, group: 'Tablettes' },
+  { id: 'ipad-pro-11', label: 'iPad Pro 11"', width: 834, height: 1194, group: 'Tablettes' },
+  { id: 'ipad-pro-13', label: 'iPad Pro 12,9"', width: 1024, height: 1366, group: 'Tablettes' },
+  { id: 'galaxy-tab-s9', label: 'Galaxy Tab S9 ≈', width: 800, height: 1280, group: 'Tablettes' },
+  { id: 'pixel-tablet', label: 'Pixel Tablet', width: 800, height: 1280, group: 'Tablettes' },
 ];
 
 const GAP = 80;
 const PADDING = 60;
 const LABEL = 28;
-/** Les écrans sont rangés en grille plutôt qu'en une seule ligne interminable. */
-const COLUMNS = 4;
+/**
+ * Les écrans sont rangés en grille plutôt qu'en une seule ligne interminable : assez de colonnes pour
+ * que la grille reste à peu près carrée (89 écrans sur 4 colonnes donnaient une bande de 23 rangées).
+ */
+const MIN_COLUMNS = 4;
+const MAX_COLUMNS = 8;
 const VIEW_KEY = 'rn-canvas:view';
 const VIEWS_KEY = 'rn-canvas:views';
 const POSITIONS_KEY = 'rn-canvas:positions';
@@ -36,6 +61,18 @@ const newId = () => Math.random().toString(36).slice(2, 10);
 const SNAP = 20;
 
 type View = { x: number; y: number; zoom: number };
+export type Tool = 'select' | 'hand';
+export const TOOL_KEY = 'rn-canvas:tool';
+/** Emplacement, dans la barre du haut de l'éditeur, des outils Créer, Groupe, Note. */
+export const TOPBAR_BOARD_SLOT = 'rnc-topbar-board';
+const MINIMAP_KEY = 'rn-canvas:minimap';
+export function readTool(): Tool {
+  try {
+    return localStorage.getItem(TOOL_KEY) === 'hand' ? 'hand' : 'select';
+  } catch {
+    return 'select';
+  }
+}
 type Point = { x: number; y: number };
 
 /** Positions mémorisées dans le navigateur par les versions précédentes (reprises dans la vue d'ensemble). */
@@ -77,7 +114,7 @@ const inside = (point: Point, box: { x: number; y: number; width: number; height
 
 /** Glisser en cours : un écran, un groupe (avec son contenu), le coin d'un groupe ou une note. */
 type Drag =
-  | { kind: 'story'; id: string; startX: number; startY: number; from: Point; moved: boolean }
+  | { kind: 'story'; id: string; startX: number; startY: number; from: Point; moved: boolean; others: [string, Point][] }
   | { kind: 'group'; id: string; startX: number; startY: number; from: Point; moved: boolean; stories: [string, Point][]; notes: [string, Point][]; groups: [string, Point][] }
   | { kind: 'resize'; id: string; startX: number; startY: number; from: Point; moved: boolean; note: boolean }
   | { kind: 'note'; id: string; startX: number; startY: number; from: Point; moved: boolean };
@@ -94,8 +131,6 @@ interface Props {
   device: Device;
   activeStory: string | null;
   errors: Record<string, string>;
-  /** Démarrage de l'app dans chaque écran (horodatage du message « ready »). */
-  readyAt?: Record<string, number>;
   /** Appels réseau coupés par écran (voir `network` dans rn-canvas.config.tsx). */
   blocked?: Record<string, { count: number; hosts: string[] }>;
   /** Écrans affichés (premier rendu reçu) ; les autres montrent un indicateur de chargement. */
@@ -117,6 +152,17 @@ interface Props {
   showBoardTools?: boolean;
   /** Noms au-dessus des écrans (menu Affichage). */
   showLabels?: boolean;
+  /** Minicarte en bas à droite (menu Affichage). */
+  showMinimap?: boolean;
+  /** Retire ces écrans de la page (décochés dans la vue d'ensemble, sortis du parcours). */
+  onHideStories?: (ids: string[]) => void;
+  /** Ouvre la fenêtre « Créer » (composant ou écran). */
+  onCreate?: () => void;
+  /**
+   * Écran qui vient d'être créé : posé au centre de la vue ou à côté de `anchor`, ajouté au parcours
+   * affiché, puis cadré et sélectionné. `seq` change à chaque demande.
+   */
+  place?: { id: string; mode: 'center' | 'beside'; anchor: string | null; seq: number } | null;
   /** Écran à amener au centre de la vue (nouvel écran de composant) ; `seq` change à chaque demande. */
   reveal?: { id: string; seq: number } | null;
   /** Page affichée : disposition, groupes et notes. */
@@ -130,6 +176,27 @@ interface Props {
   isolate?: string | null;
   /** Barres flottantes (bibliothèque) posées sur le canevas. */
   children?: React.ReactNode;
+  /** Début de la barre du haut (onglets de pages). */
+  top?: React.ReactNode;
+  /** Outil piloté par la barre de l'éditeur (Sélection, Main) ; sinon l'outil est gardé ici. */
+  tool?: Tool;
+  onToolChange?: (tool: Tool) => void;
+  /**
+   * Écrans en images (moteur de captures du serveur) : chaque écran montre sa capture, seuls les
+   * derniers écrans sélectionnés tournent en direct. null : chaque écran est une app chargée.
+   */
+  snapshots?: SnapshotView | null;
+  /** Écrans visibles (du plus proche au plus loin du centre) : capturés en premier. */
+  onVisible?: (ids: string[]) => void;
+  /** Écrans en boucle de rendu : démontés (leur image reste), jusqu'à une nouvelle sélection. */
+  looping?: Set<string>;
+}
+
+export interface SnapshotView {
+  items: Record<string, SnapshotInfo>;
+  url: (id: string, version: string) => string;
+  queued: number;
+  running: string[];
 }
 
 /**
@@ -138,13 +205,6 @@ interface Props {
  */
 /** Écrans chargés en parallèle : chacun charge l'app entière dans son iframe. */
 const MAX_PARALLEL_LOADS = 4;
-/** Durée supposée du premier écran, avant d'en avoir mesuré un (estimation du pourcentage). */
-const FIRST_LOAD_ESTIMATE = 8000;
-
-/** « 2,4 s » */
-export function seconds(ms: number): string {
-  return `${(ms / 1000).toLocaleString('fr-FR', { minimumFractionDigits: 1, maximumFractionDigits: 1 })} s`;
-}
 const LOAD_TIMEOUT = 30_000;
 /** Écrans montés au plus (chacun garde une copie de l'app en mémoire). */
 const MAX_LIVE = 12;
@@ -153,11 +213,65 @@ const ENTER_MARGIN = 0.25;
 const STAY_MARGIN = 1;
 /** Délai sans mouvement de la vue avant de charger les écrans qui y sont entrés. */
 const SETTLE_DELAY = 300;
+/** Écrans en images : écrans en direct au plus (le sélectionné et le précédent, pour passer de l'un à l'autre). */
+const LIVE_WITH_SNAPSHOTS = 2;
+
+/** Grille de référence des positions enregistrées : l'iPhone 15 (appareil par défaut), comme jusqu'ici. */
+const REFERENCE_CELL = { width: 393 + GAP, height: 852 + LABEL + GAP };
+
+/** Positions, groupes et notes d'une page mis à une autre échelle (identique si l'échelle vaut 1). */
+function scaleBoardPage(page: BoardPage, kx: number, ky: number): BoardPage {
+  if (kx === 1 && ky === 1) return page;
+  // Arrondi au dixième : aller-retour sans dérive à force de changer d'appareil.
+  const x = (v: number) => Math.round(v * kx * 10) / 10;
+  const y = (v: number) => Math.round(v * ky * 10) / 10;
+  return {
+    ...page,
+    positions: Object.fromEntries(Object.entries(page.positions).map(([id, p]) => [id, { x: x(p.x), y: y(p.y) }])),
+    groups: page.groups.map((g) => ({ ...g, x: x(g.x), y: y(g.y), width: x(g.width), height: y(g.height) })),
+    notes: page.notes.map((n) => ({ ...n, x: x(n.x), y: y(n.y) })),
+  };
+}
+
+/**
+ * Retour à l'échelle de référence après une modification : seuls les éléments changés sont
+ * reconvertis, les autres gardent exactement leur valeur enregistrée (pas de dérive d'arrondi).
+ */
+function unscaleChanges(stored: BoardPage, shown: BoardPage, next: BoardPage, kx: number, ky: number): BoardPage {
+  if (shown === stored) return next;
+  const back = scaleBoardPage(next, kx, ky);
+  const keep = <T extends { id: string }>(items: T[], shownItems: T[], storedItems: T[], backItems: T[]) =>
+    items.map((item, i) => {
+      const at = shownItems.indexOf(item);
+      return at >= 0 ? storedItems[at] : backItems[i];
+    });
+  return {
+    ...back,
+    positions: Object.fromEntries(Object.entries(next.positions).map(([id, p]) => [id, shown.positions[id] === p ? stored.positions[id] : back.positions[id]])),
+    groups: keep(next.groups, shown.groups, stored.groups, back.groups),
+    notes: keep(next.notes, shown.notes, stored.notes, back.notes),
+  };
+}
 
 export function Canvas(props: Props) {
-  const { appUrl, isolateStories, stories, allStories, device, activeStory, errors, loaded, generations, flows, frames, onActivate, onUnload, empty, reveal, children } = props;
-  const { blocked = {}, readyAt = {} } = props;
-  const { page, onChangePage, onCreateParcours, flowMode, onFlowMode, isolate, onBackgroundClick, keepLoaded = 24, loadAll = false, showBoardTools = true, showLabels = true } = props;
+  const { appUrl, isolateStories, stories, allStories, device, activeStory, errors, loaded, generations, flows, frames, onActivate, onUnload, empty, reveal, children, top } = props;
+  const { blocked = {}, snapshots = null, onVisible, looping } = props;
+  const { page: storedPage, onChangePage: changeStoredPage, onCreateParcours, flowMode, onFlowMode, isolate, onBackgroundClick, keepLoaded = 24, loadAll = false, showBoardTools = true, showLabels = true, showMinimap = true, onHideStories, onCreate, place } = props;
+  const cellWidth = device.width + GAP;
+  const cellHeight = device.height + LABEL + GAP;
+  // Positions, groupes et notes sont enregistrés pour la grille de l'appareil de référence ; chaque
+  // appareil les étire selon la sienne : un écran plus large écarte d'autant ses voisins.
+  const kx = cellWidth / REFERENCE_CELL.width;
+  const ky = cellHeight / REFERENCE_CELL.height;
+  const page = useMemo(() => scaleBoardPage(storedPage, kx, ky), [storedPage, kx, ky]);
+  const onChangePage = useCallback(
+    (update: (page: BoardPage) => BoardPage) =>
+      changeStoredPage((stored) => {
+        const shown = scaleBoardPage(stored, kx, ky);
+        return unscaleChanges(stored, shown, update(shown), 1 / kx, 1 / ky);
+      }),
+    [changeStoredPage, kx, ky],
+  );
   const viewport = useRef<HTMLDivElement>(null);
   // Vue mémorisée par page : ni un rechargement ni l'ajout / le masquage d'un écran ne la réinitialisent.
   const [view, setView] = useState<View>(() => readView(page.id) ?? { x: PADDING, y: PADDING, zoom: 0.75 });
@@ -166,9 +280,7 @@ export function Canvas(props: Props) {
   const [panning, setPanning] = useState(false);
   const drag = useRef<{ x: number; y: number; vx: number; vy: number } | null>(null);
 
-  const columns = Math.max(1, Math.min(COLUMNS, stories.length));
-  const cellWidth = device.width + GAP;
-  const cellHeight = device.height + LABEL + GAP;
+  const columns = Math.max(1, Math.min(stories.length, MAX_COLUMNS, Math.max(MIN_COLUMNS, Math.ceil(Math.sqrt((stories.length * cellHeight) / cellWidth)))));
   const visible = useMemo(() => new Set(stories.map((s) => s.id)), [stories]);
 
   // Positions choisies à la main (coin haut gauche, nom compris) ; les autres écrans restent en grille.
@@ -180,27 +292,126 @@ export function Canvas(props: Props) {
   const setGroups = useCallback((update: (g: BoardGroup[]) => BoardGroup[]) => onChangePage((pg) => ({ ...pg, groups: update(pg.groups) })), [onChangePage]);
   const setNotes = useCallback((update: (n: BoardNote[]) => BoardNote[]) => onChangePage((pg) => ({ ...pg, notes: update(pg.notes) })), [onChangePage]);
   const [editing, setEditing] = useState<string | null>(null);
-  // Les écrans non placés à la main se rangent en grille, sous ce qui est déjà disposé : un nouvel
-  // écran (fichier canvas ajouté, `rn-canvas screens`) ne tombe ni sur un écran placé ni dans un groupe.
-  const gridIndex = useMemo(() => new Map(stories.filter((s) => !positions[s.id]).map((s, i) => [s.id, i])), [stories, positions]);
-  const gridOrigin = useMemo(() => {
-    const boxes = [
+  // Sélection multiple (Maj+clic sur un écran, Maj+glisser dans le vide) : déplacée d'un bloc, groupée,
+  // mise en parcours ou masquée depuis sa barre d'actions.
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const toggleSelected = useCallback(
+    (id: string) =>
+      setSelected((sel) => {
+        const next = new Set(sel);
+        // Le premier Maj+clic emporte l'écran déjà sélectionné : on part de lui.
+        if (next.size === 0 && activeStory && activeStory !== id && visible.has(activeStory)) next.add(activeStory);
+        if (next.has(id)) next.delete(id);
+        else next.add(id);
+        return next;
+      }),
+    [activeStory, visible],
+  );
+  // Écrans retirés de la page : retirés de la sélection.
+  useEffect(() => {
+    setSelected((sel) => ([...sel].every((id) => visible.has(id)) ? sel : new Set([...sel].filter((id) => visible.has(id)))));
+  }, [visible]);
+  // Lasso (Maj+glisser dans le vide), en coordonnées du canevas affiché.
+  const [lasso, setLasso] = useState<{ x0: number; y0: number; x1: number; y1: number; base: Set<string> } | null>(null);
+  // Outils, comme dans Figma : Sélection (glisser dans le vide sélectionne, glisser un écran le déplace)
+  // et Main (glisser déplace la vue, partout). Espace maintenu : la Main le temps de l'appui.
+  const [toolState, setToolState] = useState<Tool>(readTool);
+  const tool = props.tool ?? toolState;
+  const onToolChange = useRef(props.onToolChange);
+  onToolChange.current = props.onToolChange;
+  // Minicarte fermée par défaut : elle prend de la place sur le canevas.
+  const [minimapOpen, setMinimapState] = useState(() => {
+    try {
+      return localStorage.getItem(MINIMAP_KEY) === '1';
+    } catch {
+      return false;
+    }
+  });
+  const setMinimapOpen = (open: boolean) => {
+    setMinimapState(open);
+    try {
+      localStorage.setItem(MINIMAP_KEY, open ? '1' : '0');
+    } catch {
+      // Stockage indisponible : le choix vaut pour la session.
+    }
+  };
+  const setTool = useCallback((next: Tool) => {
+    if (onToolChange.current) return onToolChange.current(next);
+    setToolState(next);
+    try {
+      localStorage.setItem(TOOL_KEY, next);
+    } catch {
+      // Stockage indisponible : l'outil vaut pour la session.
+    }
+  }, []);
+  const [spaceHand, setSpaceHand] = useState(false);
+  const hand = spaceHand || tool === 'hand';
+  useEffect(() => {
+    const typing = (e: KeyboardEvent) => (e.target as HTMLElement)?.closest?.('input, textarea, select, [contenteditable="true"]');
+    const down = (e: KeyboardEvent) => {
+      if (typing(e) || e.metaKey || e.ctrlKey || e.altKey) return;
+      if (e.code === 'Space') {
+        e.preventDefault();
+        if (!e.repeat) setSpaceHand(true);
+      } else if (e.key === 'h' || e.key === 'H') setTool('hand');
+      else if (e.key === 'v' || e.key === 'V') setTool('select');
+    };
+    const up = (e: KeyboardEvent) => {
+      if (e.code === 'Space') setSpaceHand(false);
+    };
+    const reset = () => setSpaceHand(false);
+    window.addEventListener('keydown', down);
+    window.addEventListener('keyup', up);
+    window.addEventListener('blur', reset);
+    return () => {
+      window.removeEventListener('keydown', down);
+      window.removeEventListener('keyup', up);
+      window.removeEventListener('blur', reset);
+    };
+  }, [setTool]);
+  // Glissement de la Main sur un écran : le clic qui suit ne doit pas le sélectionner.
+  const swallowClick = useRef(false);
+  // Les écrans non placés à la main se rangent en grille, dans les premières cases libres : un nouvel
+  // écran (fichier canvas ajouté, `rn-canvas screens`) ne tombe ni sur un écran placé, ni dans un groupe
+  // ou une note, et ne repousse rien. (Ranger la grille sous tout ce qui est placé la faisait sauter
+  // plus bas à chaque écran déplacé.)
+  const gridPositions = useMemo(() => {
+    const taken = [
       ...stories.filter((s) => positions[s.id]).map((s) => ({ ...positions[s.id], width: device.width, height: device.height + LABEL })),
       ...page.groups,
       ...page.notes.map((n) => ({ ...n, height: 120 })),
     ];
-    if (boxes.length === 0) return { x: 0, y: 0 };
-    return { x: Math.min(...boxes.map((b) => b.x)), y: Math.max(...boxes.map((b) => b.y + b.height)) + GAP * 2 };
-  }, [stories, positions, page.groups, page.notes, device]);
+    const free = (x: number, y: number) =>
+      !taken.some((b) => x < b.x + b.width + GAP / 2 && x + device.width + GAP / 2 > b.x && y < b.y + b.height + GAP / 2 && y + device.height + LABEL + GAP / 2 > b.y);
+    const out = new Map<string, Point>();
+    let cell = 0;
+    for (const story of stories) {
+      if (positions[story.id]) continue;
+      for (; ; cell++) {
+        const x = (cell % columns) * cellWidth;
+        const y = Math.floor(cell / columns) * cellHeight;
+        if (free(x, y)) {
+          out.set(story.id, { x, y });
+          cell++;
+          break;
+        }
+      }
+    }
+    return out;
+  }, [stories, positions, page.groups, page.notes, device, columns, cellWidth, cellHeight]);
   const positionOf = useCallback(
     (id: string): Point | null => {
       if (!visible.has(id)) return null;
-      if (positions[id]) return positions[id];
-      const i = gridIndex.get(id) ?? 0;
-      return { x: gridOrigin.x + (i % columns) * cellWidth, y: gridOrigin.y + Math.floor(i / columns) * cellHeight };
+      return positions[id] ?? gridPositions.get(id) ?? null;
     },
-    [visible, gridIndex, gridOrigin, positions, columns, cellWidth, cellHeight],
+    [visible, positions, gridPositions],
   );
+  // Avant un déplacement, les écrans encore en grille gardent leur place actuelle : sinon, l'écran
+  // tiré sortant de la grille, ceux d'après s'y décaleraient.
+  const pinGrid = useCallback(() => {
+    if (gridPositions.size === 0) return;
+    setPositions((p) => ({ ...Object.fromEntries(gridPositions), ...p }));
+  }, [gridPositions, setPositions]);
 
   // Chargement à la demande : chaque écran est une iframe qui exécute toute l'app. Un écran se charge
   // quand il entre dans la vue (ou juste autour), au plus MAX_LIVE à la fois, les plus proches du centre
@@ -230,7 +441,18 @@ export function Canvas(props: Props) {
     const timer = window.setTimeout(() => setSettled(view), SETTLE_DELAY);
     return () => window.clearTimeout(timer);
   }, [view]);
+  const snapshotMode = snapshots !== null;
+  // Écrans en images : seuls les derniers écrans sélectionnés tournent en direct.
+  const [recent, setRecent] = useState<string[]>([]);
+  useEffect(() => {
+    if (activeStory) setRecent((r) => [activeStory, ...r.filter((id) => id !== activeStory)].slice(0, LIVE_WITH_SNAPSHOTS));
+  }, [activeStory]);
   const live = useMemo(() => {
+    if (snapshots) {
+      const next = new Set(recent.filter((id) => visible.has(id) && !looping?.has(id)));
+      liveRef.current = next;
+      return next;
+    }
     const view = settled;
     const { width, height } = viewportSize;
     const cx = (width / 2 - view.x) / view.zoom;
@@ -265,13 +487,35 @@ export function Canvas(props: Props) {
     const next = new Set([...near, ...kept.slice(0, room)]);
     liveRef.current = next;
     return next;
-  }, [stories, positionOf, settled, viewportSize, device, activeStory, loaded, visible, keepLoaded, loadAll]);
+  }, [stories, positionOf, settled, viewportSize, device, activeStory, loaded, visible, keepLoaded, loadAll, snapshots, recent, looping]);
+
+  // Écrans en images : ceux de la vue (du plus proche au plus loin du centre) sont capturés en premier.
+  const inView = useMemo(() => {
+    if (!snapshotMode) return '';
+    const { width, height } = viewportSize;
+    const view = settled;
+    const cx = (width / 2 - view.x) / view.zoom;
+    const cy = (height / 2 - view.y) / view.zoom;
+    const left = (-view.x - width * ENTER_MARGIN) / view.zoom;
+    const top = (-view.y - height * ENTER_MARGIN) / view.zoom;
+    const right = (width * (1 + ENTER_MARGIN) - view.x) / view.zoom;
+    const bottom = (height * (1 + ENTER_MARGIN) - view.y) / view.zoom;
+    return stories
+      .map((s) => ({ id: s.id, p: positionOf(s.id) }))
+      .filter((s): s is { id: string; p: Point } => s.p !== null && s.p.x < right && s.p.x + device.width > left && s.p.y < bottom && s.p.y + device.height + LABEL > top)
+      .sort((a, b) => Math.hypot(a.p.x - cx, a.p.y - cy) - Math.hypot(b.p.x - cx, b.p.y - cy))
+      .map((s) => s.id)
+      .join('\n');
+  }, [snapshotMode, stories, positionOf, settled, viewportSize, device]);
+  useEffect(() => {
+    if (inView) onVisible?.(inView.split('\n'));
+  }, [inView, onVisible]);
 
   // Compteur : écrans montés pas encore affichés.
   const pending = [...live].filter((id) => !loaded[id]).length;
 
-  // « Charger tous les écrans » : tous à la fois (le plus rapide). Sinon, au plus MAX_PARALLEL_LOADS en
-  // cours de chargement à la fois. Un écran qui ne répond pas libère sa place au bout de LOAD_TIMEOUT.
+  // Parmi les écrans montés, au plus MAX_PARALLEL_LOADS en cours de chargement à la fois. Un écran qui ne
+  // répond pas libère sa place au bout de LOAD_TIMEOUT.
   const [admitted, setAdmitted] = useState<Record<string, number>>({});
   useEffect(() => {
     // Sortis de la vue : démontés, et leur état de chargement repart de zéro.
@@ -283,7 +527,7 @@ export function Canvas(props: Props) {
     }
     const now = Date.now();
     const inFlight = Object.entries(admitted).filter(([id, at]) => !loaded[id] && !errors[id] && now - at < LOAD_TIMEOUT).length;
-    const free = (loadAll ? Infinity : MAX_PARALLEL_LOADS) - inFlight;
+    const free = MAX_PARALLEL_LOADS - inFlight;
     // `live` est déjà trié du plus proche au plus loin du centre.
     const waiting = [...live].filter((id) => !(id in admitted));
     if (free > 0 && waiting.length) {
@@ -294,57 +538,7 @@ export function Canvas(props: Props) {
     // File pleine : réexaminer quand un délai de garde expire.
     const timer = window.setTimeout(() => setAdmitted((a) => ({ ...a })), 5000);
     return () => window.clearTimeout(timer);
-  }, [admitted, live, loaded, errors, onUnload, loadAll]);
-
-  // Durée de chargement de chaque écran (de son admission à son affichage), et bilan d'une vague de
-  // chargements. Le pourcentage d'un écran en cours est estimé : l'éditeur ne voit pas le
-  // téléchargement dans le cadre, seulement ses étapes (app démarrée, écran affiché) et la durée des
-  // écrans déjà chargés.
-  const [loadTimes, setLoadTimes] = useState<Record<string, number>>({});
-  useEffect(() => {
-    const now = Date.now();
-    const done = Object.keys(loaded).filter((id) => id in admitted && !(id in loadTimes));
-    const stale = Object.keys(loadTimes).filter((id) => !(id in admitted));
-    if (!done.length && !stale.length) return;
-    setLoadTimes((times) => {
-      const next = Object.fromEntries(Object.entries(times).filter(([id]) => id in admitted));
-      for (const id of done) next[id] = now - admitted[id];
-      return next;
-    });
-  }, [loaded, admitted, loadTimes]);
-  const typical = useMemo(() => {
-    const values = Object.values(loadTimes);
-    return values.length ? values.reduce((a, b) => a + b, 0) / values.length : FIRST_LOAD_ESTIMATE;
-  }, [loadTimes]);
-  const [now, setNow] = useState(Date.now());
-  useEffect(() => {
-    if (pending === 0) return;
-    const timer = window.setInterval(() => setNow(Date.now()), 250);
-    return () => window.clearInterval(timer);
-  }, [pending > 0]);
-  const percentOf = (id: string): number => {
-    if (loaded[id]) return 100;
-    if (!(id in admitted)) return 0;
-    const estimate = Math.min(95, ((now - admitted[id]) / typical) * 100);
-    return Math.floor(readyAt[id] ? Math.max(80, Math.min(99, estimate)) : Math.min(79, estimate));
-  };
-  const batch = useRef<number | null>(null);
-  const [summary, setSummary] = useState<{ count: number; ms: number; average: number } | null>(null);
-  useEffect(() => {
-    if (pending > 0) {
-      if (batch.current === null) batch.current = Date.now();
-      setSummary(null);
-      return;
-    }
-    if (batch.current === null) return;
-    const times = Object.values(loadTimes);
-    const count = [...live].filter((id) => loaded[id]).length;
-    setSummary({ count, ms: Date.now() - batch.current, average: times.length ? times.reduce((a, b) => a + b, 0) / times.length : 0 });
-    batch.current = null;
-    const timer = window.setTimeout(() => setSummary(null), 10_000);
-    return () => window.clearTimeout(timer);
-  }, [pending > 0]);
-  const overall = live.size ? Math.floor([...live].reduce((sum, id) => sum + percentOf(id), 0) / live.size) : 100;
+  }, [admitted, live, loaded, errors, onUnload]);
 
   // Emprise des écrans affichés, pour « tout afficher » et le calque des flèches.
   const bounds = useMemo(() => {
@@ -436,6 +630,20 @@ export function Canvas(props: Props) {
     [flowLayout, flowMode, groupOf, page.groups],
   );
 
+  // Vue sans aucun écran (vue mémorisée ailleurs, écrans déplacés loin) : on le dit, avec de quoi revenir.
+  const emptyView = useMemo(() => {
+    const { width, height } = viewportSize;
+    if (!width || stories.length === 0) return false;
+    const left = -view.x / view.zoom;
+    const top = -view.y / view.zoom;
+    const right = (width - view.x) / view.zoom;
+    const bottom = (height - view.y) / view.zoom;
+    return !stories.some((s) => {
+      const p = positionOf(s.id);
+      return p && p.x < right && p.x + device.width > left && p.y < bottom && p.y + device.height + LABEL > top;
+    });
+  }, [stories, positionOf, view, viewportSize, device]);
+
   const fit = useCallback(() => {
     const el = viewport.current;
     if (!el || bounds.width === 0) return;
@@ -463,7 +671,9 @@ export function Canvas(props: Props) {
   };
   const startMove = (e: React.PointerEvent, id: string) => {
     const from = positionOf(id);
-    if (from) capture(e, { kind: 'story', id, startX: e.clientX, startY: e.clientY, from, moved: false });
+    // Écran de la sélection : toute la sélection suit.
+    const others = selected.has(id) ? [...selected].filter((o) => o !== id).map((o) => [o, positionOf(o)] as [string, Point | null]).filter((o): o is [string, Point] => o[1] !== null) : [];
+    if (from) capture(e, { kind: 'story', id, startX: e.clientX, startY: e.clientY, from, moved: false, others });
   };
   // Un groupe emporte les écrans, notes et groupes dont le centre est dedans.
   const startGroupMove = (e: React.PointerEvent, group: BoardGroup) => {
@@ -488,12 +698,13 @@ export function Canvas(props: Props) {
     if (!m.moved) {
       m.moved = true;
       setMovingId(m.id);
+      if (m.kind === 'story' || m.kind === 'group') pinGrid();
     }
     const snap = (v: number) => (e.altKey ? v : Math.round(v / SNAP) * SNAP);
     // Le déplacement aimanté de l'élément tiré s'applique tel quel à son contenu.
     const ox = snap(m.from.x + dx) - m.from.x;
     const oy = snap(m.from.y + dy) - m.from.y;
-    if (m.kind === 'story') setPositions((p) => ({ ...p, [m.id]: { x: m.from.x + ox, y: m.from.y + oy } }));
+    if (m.kind === 'story') setPositions((p) => ({ ...p, [m.id]: { x: m.from.x + ox, y: m.from.y + oy }, ...Object.fromEntries(m.others.map(([id, q]) => [id, { x: q.x + ox, y: q.y + oy }])) }));
     else if (m.kind === 'note') setNotes((ns) => ns.map((n) => (n.id === m.id ? { ...n, x: m.from.x + ox, y: m.from.y + oy } : n)));
     else if (m.kind === 'resize') {
       if (m.note) setNotes((ns) => ns.map((n) => (n.id === m.id ? { ...n, width: Math.max(120, m.from.x + ox) } : n)));
@@ -581,18 +792,52 @@ export function Canvas(props: Props) {
       return p && groupOfPoint({ x: p.x + device.width / 2, y: p.y + (device.height + LABEL) / 2 })?.id === group.id;
     });
 
+  // Cadre un écran : centré, à une taille où il est lisible en entier.
+  const frameStory = useCallback(
+    (id: string): boolean => {
+      const el = viewport.current;
+      const p = positionOf(id);
+      if (!el || !p) return false;
+      const { width, height } = el.getBoundingClientRect();
+      const zoom = Math.min(1, (height - PADDING) / (device.height + LABEL));
+      setView({ zoom, x: width / 2 - (p.x + device.width / 2) * zoom, y: PADDING / 2 - p.y * zoom });
+      return true;
+    },
+    [positionOf, device],
+  );
+
+  // Écran créé : posé à l'emplacement choisi dès qu'il est dans la page, puis cadré.
+  const placed = useRef(0);
+  useEffect(() => {
+    const el = viewport.current;
+    if (!place || place.seq === placed.current || !el) return;
+    if (page.stories && !page.stories.includes(place.id)) {
+      onChangePage((pg) => (pg.stories && !pg.stories.includes(place.id) ? { ...pg, stories: [...pg.stories, place.id] } : pg));
+      return;
+    }
+    if (!visible.has(place.id)) return;
+    placed.current = place.seq;
+    const { width, height } = el.getBoundingClientRect();
+    const snap = (v: number) => Math.round(v / SNAP) * SNAP;
+    const anchor = place.mode === 'beside' && place.anchor ? positionOf(place.anchor) : null;
+    const taken = stories.filter((s) => s.id !== place.id).map((s) => positionOf(s.id)).filter((q): q is Point => q !== null);
+    const free = (q: Point) => !taken.some((t) => Math.abs(t.x - q.x) < device.width + GAP / 2 && Math.abs(t.y - q.y) < device.height + LABEL);
+    let p: Point = anchor ? { x: anchor.x + cellWidth, y: anchor.y } : { x: snap((width / 2 - view.x) / view.zoom - device.width / 2), y: snap((height / 2 - view.y) / view.zoom - (device.height + LABEL) / 2) };
+    for (let i = 0; i < 40 && !free(p); i++) p = { x: p.x + cellWidth, y: p.y };
+    pinGrid();
+    setPositions((ps) => ({ ...ps, [place.id]: p }));
+    const zoom = Math.min(1, (height - PADDING) / (device.height + LABEL));
+    setView({ zoom, x: width / 2 - (p.x + device.width / 2) * zoom, y: PADDING / 2 - p.y * zoom });
+    onActivate(place.id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [place, visible, page.stories]);
+
   // Dès que l'écran demandé est dans la grille (manifeste rechargé), la vue le cadre.
   const revealed = useRef(0);
   useEffect(() => {
-    const el = viewport.current;
-    if (!reveal || reveal.seq === revealed.current || !el) return;
-    const p = positionOf(reveal.id);
-    if (!p) return;
-    revealed.current = reveal.seq;
-    const { width, height } = el.getBoundingClientRect();
-    const zoom = Math.min(1, (height - PADDING) / (device.height + LABEL));
-    setView({ zoom, x: width / 2 - (p.x + device.width / 2) * zoom, y: PADDING / 2 - p.y * zoom });
-  }, [reveal, positionOf, device]);
+    if (!reveal || reveal.seq === revealed.current) return;
+    if (frameStory(reveal.id)) revealed.current = reveal.seq;
+  }, [reveal, frameStory]);
 
   const zoomAt = useCallback((factor: number, cx: number, cy: number) => {
     setView((v) => {
@@ -635,24 +880,112 @@ export function Canvas(props: Props) {
     return () => window.removeEventListener('keydown', onKey);
   }, [zoomAt, fit, view.zoom]);
 
+  // Main : glisser n'importe où sur le canevas (écrans compris) déplace la vue ; les barres posées
+  // dessus (pages, zoom, minicarte…) restent cliquables.
+  const onPointerDownCapture = (e: React.PointerEvent) => {
+    if (!hand || e.button !== 0) return;
+    const target = e.target as HTMLElement;
+    if (target !== e.currentTarget && !target.closest('.world')) return;
+    e.stopPropagation();
+    e.preventDefault();
+    swallowClick.current = false;
+    drag.current = { x: e.clientX, y: e.clientY, vx: view.x, vy: view.y };
+    setPanning(true);
+    (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+  };
   const onPointerDown = (e: React.PointerEvent) => {
     const target = e.target as HTMLElement;
     if (e.target !== e.currentTarget && !target.classList.contains('world') && !target.classList.contains('board-group')) return;
     if (editing && !target.closest('.note, .board-group-head')) setEditing(null);
+    if (!hand) {
+      const rect = viewport.current!.getBoundingClientRect();
+      const x = e.clientX - rect.left;
+      const y = e.clientY - rect.top;
+      // Maj : ajoute à la sélection en cours ; sinon, elle repart de zéro.
+      setLasso({ x0: x, y0: y, x1: x, y1: y, base: e.shiftKey ? selected : new Set() });
+      (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+      return;
+    }
     drag.current = { x: e.clientX, y: e.clientY, vx: view.x, vy: view.y };
     setPanning(true);
     (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
   };
   const onPointerMove = (e: React.PointerEvent) => {
+    if (lasso) {
+      const rect = viewport.current!.getBoundingClientRect();
+      const x1 = e.clientX - rect.left;
+      const y1 = e.clientY - rect.top;
+      // Écrans touchés par le rectangle, ajoutés à la sélection de départ.
+      const left = (Math.min(lasso.x0, x1) - view.x) / view.zoom;
+      const right = (Math.max(lasso.x0, x1) - view.x) / view.zoom;
+      const top = (Math.min(lasso.y0, y1) - view.y) / view.zoom;
+      const bottom = (Math.max(lasso.y0, y1) - view.y) / view.zoom;
+      const hit = stories.filter((s) => {
+        const p = positionOf(s.id);
+        return p && p.x < right && p.x + device.width > left && p.y < bottom && p.y + device.height + LABEL > top;
+      });
+      setLasso({ ...lasso, x1, y1 });
+      setSelected(new Set([...lasso.base, ...hit.map((s) => s.id)]));
+      return;
+    }
     const d = drag.current;
-    if (d) setView((v) => ({ ...v, x: d.vx + e.clientX - d.x, y: d.vy + e.clientY - d.y }));
+    if (d) {
+      if (Math.hypot(e.clientX - d.x, e.clientY - d.y) >= 4) swallowClick.current = true;
+      setView((v) => ({ ...v, x: d.vx + e.clientX - d.x, y: d.vy + e.clientY - d.y }));
+    }
   };
   const onPointerUp = (e: React.PointerEvent) => {
+    if (lasso) {
+      setLasso(null);
+      // Un clic (pas un rectangle) dans le vide : désélection.
+      if (Math.hypot(lasso.x1 - lasso.x0, lasso.y1 - lasso.y0) < 4) {
+        if (!e.shiftKey) setSelected(new Set());
+        onBackgroundClick?.();
+      }
+      return;
+    }
     const d = drag.current;
     drag.current = null;
     setPanning(false);
     // Un clic (sans déplacement) dans le vide, pas un glissement du canevas : désélection.
-    if (d && Math.hypot(e.clientX - d.x, e.clientY - d.y) < 4) onBackgroundClick?.();
+    if (d && Math.hypot(e.clientX - d.x, e.clientY - d.y) < 4) {
+      setSelected(new Set());
+      onBackgroundClick?.();
+    }
+  };
+
+  // Échap : la sélection multiple d'abord.
+  useEffect(() => {
+    if (selected.size === 0) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape' || (e.target as HTMLElement)?.closest?.('input, textarea, select')) return;
+      e.stopPropagation();
+      setSelected(new Set());
+    };
+    window.addEventListener('keydown', onKey, true);
+    return () => window.removeEventListener('keydown', onKey, true);
+  }, [selected.size]);
+
+  // Actions de la sélection.
+  const selectedStories = stories.filter((s) => selected.has(s.id));
+  const groupSelection = () => {
+    const boxes = selectedStories.map((s) => positionOf(s.id)).filter((p): p is Point => p !== null);
+    if (!boxes.length) return;
+    const x = Math.min(...boxes.map((b) => b.x)) - 60;
+    const y = Math.min(...boxes.map((b) => b.y)) - 100;
+    const group: BoardGroup = {
+      id: newId(),
+      name: 'Nouveau groupe',
+      color: GROUP_COLORS[page.groups.length % GROUP_COLORS.length],
+      x,
+      y,
+      width: Math.max(...boxes.map((b) => b.x)) + device.width + 60 - x,
+      height: Math.max(...boxes.map((b) => b.y)) + device.height + LABEL + 60 - y,
+    };
+    pinGrid();
+    setGroups((gs) => [...gs, group]);
+    setEditing(group.id);
+    setSelected(new Set());
   };
 
   const center = () => {
@@ -660,13 +993,44 @@ export function Canvas(props: Props) {
     return [rect.width / 2, rect.height / 2] as const;
   };
 
+  // Créer, Groupe, Note : dans la barre du haut de l'éditeur (portail), sinon sur le canevas.
+  const [boardSlot, setBoardSlot] = useState<HTMLElement | null>(null);
+  useEffect(() => setBoardSlot(document.getElementById(TOPBAR_BOARD_SLOT)), []);
+  const boardTools = (
+    <div className="board-tools" hidden={!showBoardTools} onPointerDown={(e) => e.stopPropagation()}>
+      {onCreate && (
+        <button className="create" onClick={onCreate} title="Créer un composant ou un écran (les vrais fichiers, aux conventions du projet)">
+          ＋ Créer
+        </button>
+      )}
+      <button onClick={addGroup} title="Groupe : cadre de couleur pour ranger des écrans (autour de l'écran actif s'il y en a un)" aria-label="Groupe">
+        ▢
+      </button>
+      <button onClick={addNote} title="Note : bloc de texte libre" aria-label="Note">
+        ✎
+      </button>
+    </div>
+  );
+
   return (
     <main
-      className={`canvas ${panning || movingId ? 'panning' : ''}`}
+      className={`canvas ${hand ? 'tool-hand' : 'tool-select'} ${panning || movingId ? 'panning' : ''}`}
       ref={viewport}
+      onPointerDownCapture={onPointerDownCapture}
+      onClickCapture={(e) => {
+        // Main : un clic sur un écran ne le sélectionne pas ; un glissement non plus.
+        if (hand && (e.target as HTMLElement).closest('.world')) e.stopPropagation();
+        swallowClick.current = false;
+      }}
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}
+      // Le canevas ne défile jamais (la vue se déplace par transform) : un focus ou un scrollIntoView
+      // le décalerait, barres flottantes comprises.
+      onScroll={(e) => {
+        e.currentTarget.scrollLeft = 0;
+        e.currentTarget.scrollTop = 0;
+      }}
     >
       {!empty && page.stories !== null && stories.length === 0 && (
         <div className="canvas-hint">Parcours vide : cochez des écrans dans la liste de gauche pour les y ajouter.</div>
@@ -707,7 +1071,7 @@ export const Default = { props: {} };`}</pre>
           return (
             <section
               key={story.id}
-              className={`artboard ${activeStory === story.id ? 'active' : ''} ${movingId === story.id ? 'moving' : ''}`}
+              className={`artboard ${activeStory === story.id ? 'active' : ''} ${selected.has(story.id) ? 'selected' : ''} ${movingId === story.id || (movingId !== null && selected.has(movingId) && selected.has(story.id)) ? 'moving' : ''}`}
               style={p === null ? { display: 'none', width: device.width } : { left: p.x, top: p.y, width: device.width, transform: shifts.stories[story.id] ? `translateX(${shifts.stories[story.id]}px)` : undefined }}
               onMouseEnter={() => setHovered(story.id)}
               onMouseLeave={() => setHovered((h) => (h === story.id ? null : h))}
@@ -718,19 +1082,34 @@ export const Default = { props: {} };`}</pre>
                 onPointerMove={continueMove}
                 onPointerUp={endMove}
                 onPointerCancel={endMove}
-                onClick={() => {
+                onClick={(e) => {
                   if (justMoved.current) justMoved.current = false;
-                  else onActivate(story.id);
+                  else if (e.shiftKey) toggleSelected(story.id);
+                  else {
+                    if (!selected.has(story.id)) setSelected(new Set());
+                    onActivate(story.id);
+                  }
                 }}
-                title={`${story.id}\nGlisser pour déplacer l'écran (Alt : sans aimantation)`}
+                title={`${story.id}\nGlisser pour déplacer l'écran (Alt : sans aimantation) · Maj+clic : sélection multiple`}
               >
                 {story.file.split('/').pop()!.replace(/\.canvas\.\w+$/, '')} · {story.title}
-                {loadTimes[story.id] !== undefined && <span className="load-time"> · {seconds(loadTimes[story.id])}</span>}
               </button>
               <div className="frame" style={{ width: device.width, height: device.height }}>
+                {snapshots && <SnapshotFrame story={story} info={snapshots.items[story.id]} url={snapshots.url} running={snapshots.running.includes(story.id)} live={live.has(story.id)} shown={Boolean(loaded[story.id])} liveError={Boolean(errors[story.id])}
+                    onActivate={(e) => {
+                      if (justMoved.current) justMoved.current = false;
+                      else if (e.shiftKey) toggleSelected(story.id);
+                      else {
+                        if (!selected.has(story.id)) setSelected(new Set());
+                        onActivate(story.id);
+                      }
+                    }}
+                    drag={{ onPointerDown: (e) => startMove(e, story.id), onPointerMove: continueMove, onPointerUp: endMove, onPointerCancel: endMove }}
+                  />}
                 {story.id in admitted && (
                   <iframe
                     title={story.id}
+                    className={snapshots && !loaded[story.id] ? 'frame-live-pending' : undefined}
                     src={storyUrl(appUrl, story, isolateStories, generations[story.id])}
                     width={device.width}
                     height={device.height}
@@ -740,25 +1119,13 @@ export const Default = { props: {} };`}</pre>
                     }}
                   />
                 )}
-                {!live.has(story.id) ? (
+                {snapshots ? null : !live.has(story.id) ? (
                   <div className="frame-loading frame-asleep">Hors de la vue · chargé en s'en approchant</div>
                 ) : (
                   !loaded[story.id] && (
                     <div className="frame-loading" role="status">
                       <span className="spinner" />
-                      {story.id in admitted ? (
-                        <>
-                          <span>
-                            {readyAt[story.id] ? "Affichage de l'écran…" : "Chargement de l'app…"} {percentOf(story.id)} %
-                          </span>
-                          <span className="frame-progress" title="Estimation : étapes du chargement et durée des écrans déjà chargés">
-                            <span style={{ width: `${percentOf(story.id)}%` }} />
-                          </span>
-                          <span className="muted small">{seconds(now - admitted[story.id])}</span>
-                        </>
-                      ) : (
-                        'En attente…'
-                      )}
+                      {story.id in admitted ? "Chargement de l'écran…" : 'En attente…'}
                     </div>
                   )
                 )}
@@ -796,36 +1163,207 @@ export const Default = { props: {} };`}</pre>
         ))}
         {flowView && <FlowLayer layout={flowView} groupFlows={flowView.groupFlows} width={bounds.x + bounds.width} height={bounds.y + bounds.height} zoom={view.zoom} focus={hovered} />}
       </div>
-      {pending > 0 && (
+      {snapshots && snapshots.queued > 0 && (
         <div className="canvas-progress" role="status">
           <span className="spinner" />
-          Chargement des écrans{loadAll ? '' : ' de la vue'} · {live.size - pending}/{live.size} · {overall} %{batch.current !== null && <> · {seconds(now - batch.current)}</>}
+          Captures des écrans · {stories.filter((s) => snapshots.items[s.id]?.version && snapshots.items[s.id].state !== 'stale').length}/{stories.length}
+          {snapshots.running.length > 0 && <span className="muted"> · en cours : {snapshots.running.map((id) => id.split('/').pop()!.replace(/\.canvas\.\w+#.*$/, '')).join(', ')}</span>}
         </div>
       )}
-      {pending === 0 && summary && summary.count > 0 && (
-        <div className="canvas-progress done" role="status">
-          ✓ {summary.count} écran{summary.count > 1 ? 's' : ''} chargé{summary.count > 1 ? 's' : ''} en {seconds(summary.ms)} · {seconds(summary.average)} en moyenne par écran
+      {!snapshots && pending > 0 && (
+        <div className="canvas-progress" role="status">
+          <span className="spinner" />
+          Chargement des écrans{loadAll ? '' : ' de la vue'} · {live.size - pending}/{live.size}
         </div>
       )}
       {flowLayout && flowView && <FlowLegend layout={flowLayout} view={flowView} mode={page.groups.length ? flowMode : 'all'} onMode={onFlowMode} hasGroups={page.groups.length > 0} parcours={page.stories !== null} />}
       {children}
-      <div className="board-tools" hidden={!showBoardTools} onPointerDown={(e) => e.stopPropagation()}>
-        <button onClick={addGroup} title="Cadre de couleur pour ranger des écrans (autour de l'écran actif s'il y en a un)">
-          ▢ Groupe
+      {boardSlot && createPortal(boardTools, boardSlot)}
+      {lasso && (
+        <div
+          className="canvas-lasso"
+          style={{ left: Math.min(lasso.x0, lasso.x1), top: Math.min(lasso.y0, lasso.y1), width: Math.abs(lasso.x1 - lasso.x0), height: Math.abs(lasso.y1 - lasso.y0) }}
+        />
+      )}
+      {selected.size > 0 && !lasso && (
+        <div className="selection-bar" onPointerDown={(e) => e.stopPropagation()}>
+          <span>
+            {selected.size} écran{selected.size > 1 ? 's' : ''} sélectionné{selected.size > 1 ? 's' : ''}
+          </span>
+          <button onClick={groupSelection} title="Cadre de couleur autour de ces écrans">
+            ▢ Grouper
+          </button>
+          <button
+            onClick={() => {
+              const name = window.prompt('Nom du parcours', 'Nouveau parcours')?.trim();
+              if (!name) return;
+              onCreateParcours(name, selectedStories.map((s) => s.id));
+              setSelected(new Set());
+            }}
+            title="Nouvelle page avec ces écrans"
+          >
+            ⇢ Parcours
+          </button>
+          {onHideStories && (
+            <button
+              onClick={() => {
+                onHideStories([...selected]);
+                setSelected(new Set());
+              }}
+              title={page.stories ? 'Retirer ces écrans du parcours' : 'Décocher ces écrans (ils restent dans la liste de gauche)'}
+            >
+              {page.stories ? '− Retirer du parcours' : '◌ Masquer'}
+            </button>
+          )}
+          <button className="selection-clear" onClick={() => setSelected(new Set())} title="Désélectionner (Échap)" aria-label="Désélectionner">
+            ×
+          </button>
+        </div>
+      )}
+      {emptyView && (
+        <button className="canvas-empty-view" onClick={fit} onPointerDown={(e) => e.stopPropagation()}>
+          Aucun écran dans la vue · <strong>Tout afficher</strong>
         </button>
-        <button onClick={addNote} title="Bloc de texte libre">
-          ✎ Note
-        </button>
-      </div>
-      <div className="zoom-controls">
-        <button onClick={() => zoomAt(1 / 1.2, ...center())} aria-label="Dézoomer">−</button>
-        <button onClick={fit} title="Tout afficher">{Math.round(view.zoom * 100)} %</button>
-        <button onClick={() => zoomAt(1.2, ...center())} aria-label="Zoomer">+</button>
-        <button onClick={resetPositions} disabled={Object.keys(positions).length === 0} title="Remettre les écrans dans la grille d'origine" aria-label="Repositionner les écrans">
-          ⊞
-        </button>
+      )}
+      {showMinimap && minimapOpen && stories.length > 0 && viewportSize.width > 0 && (
+        <Minimap
+          boxes={stories.map((s) => ({ id: s.id, p: positionOf(s.id) })).filter((b): b is { id: string; p: Point } => b.p !== null)}
+          groups={page.groups}
+          bounds={bounds}
+          device={device}
+          view={view}
+          viewportSize={viewportSize}
+          activeStory={activeStory}
+          live={live}
+          selected={selected}
+          onCenter={(x, y) => setView((v) => ({ ...v, x: viewportSize.width / 2 - x * v.zoom, y: viewportSize.height / 2 - y * v.zoom }))}
+        />
+      )}
+      {/* Une seule barre en haut : rien ne se chevauche, même avec les deux panneaux ouverts. */}
+      <div className="canvas-top">
+        {top}
+        <span className="canvas-top-spacer" />
+        {!boardSlot && boardTools}
+        <div className="zoom-controls">
+          <button className={minimapOpen ? 'on' : ''} onClick={() => setMinimapOpen(!minimapOpen)} disabled={!showMinimap} title="Minicarte" aria-label="Afficher la minicarte" aria-pressed={minimapOpen}>
+            ▣
+          </button>
+          <button onClick={() => zoomAt(1 / 1.2, ...center())} aria-label="Dézoomer">−</button>
+          <button onClick={fit} title="Tout afficher">{Math.round(view.zoom * 100)} %</button>
+          <button onClick={() => zoomAt(1.2, ...center())} aria-label="Zoomer">+</button>
+          <button onClick={resetPositions} disabled={Object.keys(positions).length === 0} title="Remettre les écrans dans la grille d'origine" aria-label="Repositionner les écrans">
+            ⊞
+          </button>
+        </div>
       </div>
     </main>
+  );
+}
+
+/** Comme autoFocus, sans faire défiler le canevas jusqu'au champ (un groupe ou une note hors de la vue). */
+const focusWithoutScroll = (el: HTMLInputElement | HTMLTextAreaElement | null) => {
+  el?.focus({ preventScroll: true });
+};
+
+const MINIMAP_WIDTH = 200;
+const MINIMAP_HEIGHT = 140;
+
+/**
+ * Minicarte : tous les écrans (et groupes) de la page, et le cadre de la vue. Cliquer ou glisser
+ * dedans déplace la vue à cet endroit, au même zoom.
+ */
+function Minimap({ boxes, groups, bounds, device, view, viewportSize, activeStory, live, selected, onCenter }: {
+  boxes: { id: string; p: Point }[];
+  groups: BoardGroup[];
+  bounds: { x: number; y: number; width: number; height: number };
+  device: Device;
+  view: View;
+  viewportSize: { width: number; height: number };
+  activeStory: string | null;
+  live: Set<string>;
+  selected: Set<string>;
+  onCenter: (x: number, y: number) => void;
+}) {
+  // Partie visible du canevas, en coordonnées du monde ; la carte englobe le contenu et la vue.
+  const seen = { x: -view.x / view.zoom, y: -view.y / view.zoom, width: viewportSize.width / view.zoom, height: viewportSize.height / view.zoom };
+  const left = Math.min(bounds.x, seen.x);
+  const top = Math.min(bounds.y, seen.y);
+  const width = Math.max(bounds.x + bounds.width, seen.x + seen.width) - left;
+  const height = Math.max(bounds.y + bounds.height, seen.y + seen.height) - top;
+  const scale = Math.min(MINIMAP_WIDTH / width, MINIMAP_HEIGHT / height);
+  const ox = (MINIMAP_WIDTH - width * scale) / 2;
+  const oy = (MINIMAP_HEIGHT - height * scale) / 2;
+  const at = (x: number, y: number) => ({ x: ox + (x - left) * scale, y: oy + (y - top) * scale });
+  const dragging = useRef(false);
+  const toWorld = (e: React.PointerEvent<SVGSVGElement>) => {
+    const rect = e.currentTarget.getBoundingClientRect();
+    onCenter((e.clientX - rect.left - ox) / scale + left, (e.clientY - rect.top - oy) / scale + top);
+  };
+  const v = at(seen.x, seen.y);
+  return (
+    <div className="minimap" onPointerDown={(e) => e.stopPropagation()} title="Cliquer ou glisser pour se déplacer">
+      <svg
+        width={MINIMAP_WIDTH}
+        height={MINIMAP_HEIGHT}
+        onPointerDown={(e) => {
+          dragging.current = true;
+          e.currentTarget.setPointerCapture(e.pointerId);
+          toWorld(e);
+        }}
+        onPointerMove={(e) => dragging.current && toWorld(e)}
+        onPointerUp={() => {
+          dragging.current = false;
+        }}
+      >
+        {groups.map((g) => {
+          const a = at(g.x, g.y);
+          return <rect key={g.id} className="minimap-group" data-color={g.color} x={a.x} y={a.y} width={g.width * scale} height={g.height * scale} rx={2} />;
+        })}
+        {boxes.map(({ id, p }) => {
+          const a = at(p.x, p.y + LABEL);
+          return (
+            <rect
+              key={id}
+              className={`minimap-story ${id === activeStory || selected.has(id) ? 'active' : live.has(id) ? 'live' : ''}`}
+              x={a.x}
+              y={a.y}
+              width={Math.max(1.5, device.width * scale)}
+              height={Math.max(2, device.height * scale)}
+              rx={1}
+            />
+          );
+        })}
+        <rect className="minimap-view" x={v.x} y={v.y} width={seen.width * scale} height={seen.height * scale} rx={2} />
+      </svg>
+    </div>
+  );
+}
+
+/**
+ * Image d'un écran (moteur de captures). Un clic le sélectionne : il passe en direct, son image reste
+ * dessous jusqu'à ce que l'app y ait affiché quelque chose.
+ */
+function SnapshotFrame({ story, info, url, running, live, shown, liveError, onActivate, drag }: { story: StoryEntry; info: SnapshotInfo | undefined; url: SnapshotView['url']; running: boolean; live: boolean; shown: boolean; liveError: boolean; onActivate: (e: React.MouseEvent) => void; drag: Pick<React.HTMLAttributes<HTMLElement>, 'onPointerDown' | 'onPointerMove' | 'onPointerUp' | 'onPointerCancel'> }) {
+  const status = live ? (shown ? 'En direct' : 'Démarrage…') : running ? 'Capture…' : info?.state === 'stale' ? 'Mise à jour…' : null;
+  return (
+    <>
+      {info?.version ? (
+        <img className="frame-snapshot" src={url(story.id, info.version)} alt={story.title} draggable={false} onClick={onActivate} {...drag} title="Cliquer pour l'ouvrir en direct (inspecter, modifier) · glisser pour le déplacer" />
+      ) : (
+        <button className="frame-loading frame-snapshot-pending" onClick={onActivate}>
+          {running ? <span className="spinner" /> : null}
+          {running ? 'Capture en cours…' : 'Capture en attente · cliquer pour l’ouvrir en direct'}
+        </button>
+      )}
+      {status && <span className={`frame-badge ${live && shown ? 'is-live' : ''}`}>{status}</span>}
+      {/* L'erreur de l'écran en direct (s'il y en a une) passe devant celle de la capture : une seule à la fois. */}
+      {!live && !liveError && (info?.state === 'error' || info?.state === 'loop') && info.message && (
+        <div className="frame-error frame-snapshot-error" onClick={onActivate}>
+          {info.state === 'loop' ? '⟳ ' : ''}
+          {info.message}
+        </div>
+      )}
+    </>
   );
 }
 
@@ -872,7 +1410,7 @@ function GroupFrame({ group, shift, zoom, editing, members, leaving, nameOf, onE
       >
         {editing ? (
           <input
-            autoFocus
+            ref={focusWithoutScroll}
             defaultValue={group.name}
             onFocus={(e) => e.target.select()}
             onBlur={(e) => {
@@ -937,7 +1475,7 @@ function Note({ note, shift, editing, moving, onEdit, onChange, onRemove, onPoin
     >
       {editing ? (
         <textarea
-          autoFocus
+          ref={focusWithoutScroll}
           defaultValue={note.text}
           placeholder="Écrivez une note…"
           rows={Math.max(3, note.text.split('\n').length + 1)}

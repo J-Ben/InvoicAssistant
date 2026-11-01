@@ -49,6 +49,9 @@ export function generateExamples(root: string, components: { file: string; name:
   const entries: [string, Value][] = [];
 
   for (const { file, name } of components) {
+    // Les exemples sont rangés par nom de composant : deux composants homonymes (dossiers différents)
+    // n'en ont qu'un, celui du premier trouvé.
+    if (entries.some(([n]) => n === name)) continue;
     const source = program.getSourceFile(path.join(root, file));
     if (!source) continue;
     const fn = componentFunction(ts, source, name);

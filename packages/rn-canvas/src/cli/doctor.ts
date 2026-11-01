@@ -383,6 +383,23 @@ export function diagnose(root: string): Check[] {
     });
   }
 
+  // Création de composants et d'écrans : conventions retenues (détectées ou fixées dans rn-canvas.json).
+  try {
+    const c = new Project(root).conventions();
+    const shape = [c.layout.folder ? 'un dossier par composant' : 'un fichier par composant', c.layout.propsFile && 'props à part', c.layout.stylesFile && 'styles à part', c.layout.index && 'index', c.layout.exportDefault ? 'export par défaut' : 'export nommé']
+      .filter(Boolean)
+      .join(', ');
+    if (c.componentsRoot) {
+      add('ok', `Création : composants dans ${c.componentsRoot} (${c.levels.map((l) => (l.alias ? `${l.name} → ${l.alias}` : l.name)).join(', ')})`, {
+        detail: `${shape} ; écrans proposés dans ${c.screenDirs.slice(0, 3).join(', ')}${c.skeleton ? ' ; react-zero-skeleton proposé' : ''}. À changer dans ${CONFIG_FILE}, clé "create".`,
+      });
+    } else {
+      add('warn', 'Création : aucun dossier Atomic Design (atoms, molecules…) trouvé', { detail: `Seuls les écrans peuvent être créés.`, fix: `Indiquez-le dans ${CONFIG_FILE} : "create": { "componentsRoot": "src/components" }.` });
+    }
+  } catch {
+    // Détection impossible (projet illisible) : rien à signaler de plus.
+  }
+
   return checks;
 }
 

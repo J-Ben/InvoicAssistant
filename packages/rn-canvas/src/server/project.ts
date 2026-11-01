@@ -3,7 +3,7 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
-import type { Board, ComponentEntry, EditRequest, FlowLink, EditResult, HistoryState, InspectResult, ProjectInfo, StoryGroup, ThemeInfo, ThemeToken } from '../shared/protocol.ts';
+import type { Board, ComponentEntry, CreateInfo, EditRequest, FlowLink, EditResult, HistoryState, InspectResult, ProjectInfo, StoryGroup, ThemeInfo, ThemeToken } from '../shared/protocol.ts';
 import { emptyBoard, normalizeBoard, parseLoc } from '../shared/protocol.ts';
 import { type AstNode, type Patch, type SourceFile, applyPatches, findProperty, jsxName, moduleDeclarators, parse, programOf, propertyKey, unwrap, walk } from './ast.ts';
 import { setProp, setStyle, setText, setToken, themeObject } from './edit.ts';
@@ -12,8 +12,12 @@ import { matchRoute, navigationLinks, relativeImports, resolveImport, routesOf }
 import { navigationScreens } from './navigators.ts';
 import { stripJsonComments } from './setup.ts';
 import { SourceError, findElement, inspectElement, locOfIndex, meaningfulChildren, normalizeJsxText, sourceValue } from './inspect.ts';
-import { PRIMITIVES, componentsOf } from './library.ts';
-import { type Insertion, componentJsx, duplicateElement, ensureImport, finalOffset, insertion, moveElement, removeElement } from './structure.ts';
+import { PRIMITIVES, componentsOf, requiredProps } from './library.ts';
+import { type Conventions, detectConventions, levelOf, screenFilesOf } from './conventions.ts';
+import { type CreatePlan, type CreateRequest, planCreate, writePlan } from './create.ts';
+import { snippet } from './snippets.ts';
+import { addStyleProp } from './styleprop.ts';
+import { type Insertion, componentJsx, duplicateElement, ensureDefaultImport, ensureImport, finalOffset, insertion, moveElement, removeElement } from './structure.ts';
 
 export interface CanvasConfig {
   /** URL de l'app en version web (serveur de dev Expo). */
@@ -203,7 +207,7 @@ export class Project {
     // Composants de la bibliothèque, chargés à la demande pour leurs aperçus.
     const components = this.components()
       .filter((c) => c.file)
-      .map((c) => `    ${JSON.stringify(`${c.file}#${c.name}`)}: () => require(${JSON.stringify(importPath(c.file!))}).${c.name},`)
+      .map((c) => `    ${JSON.stringify(`${c.file}#${c.name}`)}: () => require(${JSON.stringify(importPath(c.file!))}).${c.exportDefault ? 'default' : c.name},`)
       .join('\n');
 
     const content = `/* eslint-disable */
@@ -421,10 +425,88 @@ export const Actuel: CanvasStory = {};
       } catch {
         // Fichier en cours d'écriture ou invalide : il réapparaîtra au prochain appel.
       }
+      // Un export par défaut n'est un composant de bibliothèque que s'il est rangé comme tel (niveau Atomic
+      // Design, dossier `components/`) : sinon ce sont surtout des écrans.
+      found = found.map((entry) => this.completeEntry(entry)).filter((entry) => !entry.exportDefault || entry.level || entry.file!.split('/').includes('components'));
       this.libraryCache.set(file, { mtime, entries: found });
       return found;
     });
     return [...PRIMITIVES, ...entries];
+  }
+
+  /**
+   * Ce que le seul fichier ne dit pas : props déclarées dans `Nom.props.ts`, import par le dossier quand
+   * il a un index (`@atoms/Button`), rangement par niveau Atomic Design dans la bibliothèque.
+   */
+  private completeEntry(entry: ComponentEntry): ComponentEntry {
+    const dir = path.posix.dirname(entry.file!);
+    const out = { ...entry };
+    if (!out.props.length) {
+      const propsFile = ['ts', 'tsx'].map((ext) => `${dir}/${entry.name}.props.${ext}`).find((f) => fs.existsSync(this.resolve(f)));
+      if (propsFile) {
+        try {
+          out.props = requiredProps(programOf(parse(fs.readFileSync(this.resolve(propsFile), 'utf8'), propsFile).ast), `${entry.name}Props`);
+        } catch {
+          // Fichier de props illisible : pas de props obligatoires connues.
+        }
+      }
+    }
+    if (path.posix.basename(dir) === entry.name && ['ts', 'tsx', 'js'].some((ext) => fs.existsSync(this.resolve(`${dir}/index.${ext}`)))) out.module = dir;
+    const conventions = this.conventions();
+    const level = conventions.levels.find((l) => entry.file!.startsWith(`${l.dir}/`));
+    if (level) {
+      out.level = level.name;
+      const sub = entry.file!.slice(level.dir.length + 1).split('/');
+      // `molecules/Cards/ClientCard/ClientCard.tsx` : rangé dans « molecules · Cards ».
+      out.group = sub.length > 2 && level.groups.includes(sub[0]) ? `${level.name} · ${sub[0]}` : level.name;
+    }
+    return out;
+  }
+
+  // ---- Création de composants et d'écrans ----
+
+  private conventionsCache: { at: number; value: Conventions } | null = null;
+
+  /** Conventions du projet (détectées, ou fixées dans rn-canvas.json, clé `create`). */
+  conventions(): Conventions {
+    if (this.conventionsCache && Date.now() - this.conventionsCache.at < 5000) return this.conventionsCache.value;
+    const value = detectConventions(this.root, { include: this.config.include, screenFiles: screenFilesOf(this.root, this.canvasFiles()) });
+    this.conventionsCache = { at: Date.now(), value };
+    return value;
+  }
+
+  /** Conventions, et écrans du canevas qu'on peut copier (leur composant principal). */
+  createInfo(): CreateInfo {
+    const screens: CreateInfo['screens'] = [];
+    for (const file of [...new Set(screenFilesOf(this.root, this.canvasFiles()))]) {
+      if (!/\.(tsx|jsx)$/.test(file)) continue;
+      try {
+        const found = componentsOf(file, this.read(file));
+        const main = found.find((c) => c.exportDefault) ?? found[0];
+        if (main) screens.push({ name: main.name, file });
+      } catch {
+        // Fichier illisible : pas proposé.
+      }
+    }
+    return { ...this.conventions(), screens: screens.sort((a, b) => a.name.localeCompare(b.name)) };
+  }
+
+  private canvasDir(): string {
+    return this.config.include.includes('canvas') ? 'canvas' : `${this.config.include[0] ?? 'src'}/canvas`;
+  }
+
+  /** Fichiers que créerait `request` (aperçu dans l'éditeur), sans rien écrire. */
+  planCreate(request: CreateRequest): CreatePlan {
+    return planCreate(this.root, this.conventions(), this.canvasDir(), request);
+  }
+
+  create(request: CreateRequest): CreatePlan {
+    const plan = this.planCreate(request);
+    writePlan(this.root, plan);
+    this.conventionsCache = null;
+    this.libraryCache.clear();
+    this.writeManifest();
+    return plan;
   }
 
   /** Arbre des éléments JSX d'un fichier (pour les outils qui n'ont pas l'app sous les yeux). */
@@ -508,6 +590,11 @@ export const Actuel: CanvasStory = {};
 
   private applyEdit(request: EditRequest): Omit<EditResult, 'history'> {
     if (request.op === 'addStory') return this.addStory(request.file, request.base, request.exportName, request.storage);
+    if (request.op === 'addStyleProp') {
+      const src = this.read(request.file);
+      this.write(request.file, src, addStyleProp(src, request.name));
+      return { ok: true, file: request.file, loc: null };
+    }
     if (request.op === 'setToken') {
       const theme = this.config.theme;
       if (!theme) throw new SourceError('Aucun thème configuré dans rn-canvas.json.');
@@ -560,13 +647,37 @@ export const Actuel: CanvasStory = {};
         ({ patches, inserted } = moveElement(src, element, targetElement, request.position));
         break;
       }
+      case 'insertSnippet': {
+        const built = snippet(this.root, parsed.file, request.snippet, src.quote);
+        // Les briques sont écrites avec deux espaces : ramenées à l'indentation du fichier (4 espaces, tabulation…).
+        const unit = /^( +|\t)\S/m.exec(src.code)?.[1] ?? '  ';
+        const jsx = unit === '  ' ? built.jsx : built.jsx.replace(/^((?: {2})+)/gm, (lead: string) => unit.repeat(lead.length / 2));
+        inserted = insertion(src, element, request.position, jsx, '');
+        // Un même module importé une fois (View et Text de react-native…) : un patch par nom manquant.
+        const seen = new Set<string>();
+        const imports = built.imports.filter((i) => !seen.has(i.name) && seen.add(i.name)).flatMap((i) => ensureImport(src, i.name, i.from));
+        patches = [inserted, ...imports];
+        break;
+      }
       case 'insert': {
         const entry = this.components().find((c) => c.name === request.component.name && c.file === request.component.file);
         if (!entry) throw new SourceError(`Composant « ${request.component.name} » introuvable dans la bibliothèque.`);
+        // Atomic Design : un composant ne contient que des composants de son niveau ou d'un niveau inférieur.
+        const conventions = this.conventions();
+        const host = levelOf(conventions, parsed.file);
+        const inner = entry.file ? levelOf(conventions, entry.file) : null;
+        if (host !== null && inner !== null && inner > host) {
+          const hostLevel = conventions.levels.find((l) => parsed.file.startsWith(`${l.dir}/`))!.name;
+          throw new SourceError(`Atomic Design : ${entry.name} est dans « ${entry.level} », il ne peut pas aller dans un composant de « ${hostLevel} » (un niveau ne contient que des niveaux inférieurs ou égaux).`);
+        }
+        // Un composant dans sa propre définition s'afficherait à l'infini (la page finit par planter).
+        if (entry.file === parsed.file && declarationsAround(src.ast, element).includes(entry.name)) {
+          throw new SourceError(`${entry.name} ne peut pas se contenir lui-même : l'élément choisi est dans sa propre définition, le rendu tournerait à l'infini.`);
+        }
         const jsx = componentJsx(entry.name, entry.props);
         inserted = insertion(src, element, request.position, jsx, '');
         const from = this.importPath(parsed.file, entry, src);
-        patches = [inserted, ...(from ? ensureImport(src, entry.name, from) : [])];
+        patches = [inserted, ...(from ? (entry.exportDefault ? ensureDefaultImport(src, entry.name, from) : ensureImport(src, entry.name, from)) : [])];
         break;
       }
       default:
@@ -640,7 +751,7 @@ export const Actuel: CanvasStory = {};
       .filter(Boolean);
     const others = entry.props.filter((p) => p.type !== 'function' && !(p.type === 'boolean' && /^(visible|open|isOpen|isVisible|show|opened)$/.test(p.name)) && p.name !== 'children');
     const code = `import type { CanvasMeta, CanvasStory } from 'rn-canvas/runtime';
-import { ${name} } from ${JSON.stringify(this.moduleSpecifier(target, entry.file!))};
+import ${entry.exportDefault ? name : `{ ${name} }`} from ${JSON.stringify(this.moduleSpecifier(target, entry.module ?? entry.file!))};
 
 // ${name} affiché seul, en taille réelle. Ses données viennent de \`examples.${name}\` dans
 // rn-canvas.config.tsx${others.length ? ` (props attendues : ${others.map((p) => p.name).join(', ')})` : ''}.
@@ -672,13 +783,17 @@ export const Exemple: CanvasStory = {};
     if (!entry.file) return 'react-native';
     if (entry.file === file) return '';
     // Même style que le fichier : alias de tsconfig (`@presentation/…`) s'il en importe déjà par cet alias.
-    const target = entry.file.replace(/\.(tsx|jsx|ts|js)$/, '').replace(/\/index$/, '');
+    // Un composant rangé dans son dossier avec un index s'importe par le dossier (`@atoms/Button`).
+    const target = (entry.module ?? entry.file).replace(/\.(tsx|jsx|ts|js)$/, '').replace(/\/index$/, '');
+    // Niveau Atomic Design avec un alias (`@atoms`) : toujours par l'alias, comme le reste du projet.
+    const level = entry.level ? this.conventions().levels.find((l) => l.name === entry.level) : null;
+    if (level?.alias && target.startsWith(`${level.dir}/`)) return `${level.alias}/${target.slice(level.dir.length + 1)}`;
     for (const { alias, dir } of this.pathAliases()) {
       if (!target.startsWith(`${dir}/`)) continue;
       const used = src && programOf(src.ast).body.some((s: AstNode) => s.type === 'ImportDeclaration' && String(s.source.value).startsWith(`${alias}/`));
       if (used) return `${alias}/${target.slice(dir.length + 1)}`;
     }
-    let rel = path.posix.relative(path.posix.dirname(file), entry.file).replace(/\.(tsx|jsx|ts|js)$/, '');
+    let rel = path.posix.relative(path.posix.dirname(file), entry.module ?? entry.file).replace(/\.(tsx|jsx|ts|js)$/, '');
     if (!rel.startsWith('.')) rel = `./${rel}`;
     return rel;
   }
@@ -741,6 +856,8 @@ export function describe(request: EditRequest): string {
       return `${request.prop} sur <${request.name}>`;
     case 'setToken':
       return `jeton ${request.path}`;
+    case 'addStyleProp':
+      return `prop style de ${request.name}`;
     case 'remove':
       return `suppression de <${request.name}>`;
     case 'duplicate':
@@ -749,11 +866,26 @@ export function describe(request: EditRequest): string {
       return `déplacement de <${request.name}>`;
     case 'insert':
       return `ajout de <${request.component.name}>`;
+    case 'insertSnippet':
+      return `ajout d'une brique (${request.snippet.kind})`;
     case 'addStory':
       return `variante ${request.exportName}`;
     default:
       return 'modification';
   }
+}
+
+/** Noms des déclarations (const, function) qui contiennent le nœud, du plus extérieur au plus proche. */
+function declarationsAround(ast: AstNode, target: AstNode): string[] {
+  let names: string[] = [];
+  walk(ast, (node, parents) => {
+    if (node !== target) return;
+    names = parents
+      .filter((p) => (p.type === 'VariableDeclarator' && p.id.type === 'Identifier') || (p.type === 'FunctionDeclaration' && p.id))
+      .map((p) => p.id.name);
+    return false;
+  });
+  return names;
 }
 
 export function loadConfig(root: string): CanvasConfig {

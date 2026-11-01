@@ -3,6 +3,7 @@
  * obligatoires (lues dans l'interface `<Nom>Props`), plus quelques primitives React Native.
  */
 import type { ComponentEntry } from '../shared/protocol.ts';
+import { acceptsStyle } from './styleprop.ts';
 import { type AstNode, type SourceFile, programOf, unwrap } from './ast.ts';
 
 export const PRIMITIVES: ComponentEntry[] = ['View', 'Text', 'ScrollView', 'TextInput', 'Pressable'].map((name) => ({
@@ -33,8 +34,22 @@ export function componentsOf(file: string, src: SourceFile): ComponentEntry[] {
     }
     for (const name of names) {
       if (!/^[A-Z]/.test(name)) continue;
-      out.push({ name, file, group, props: requiredProps(program, `${name}Props`) });
+      out.push({ name, file, group, props: requiredProps(program, `${name}Props`), acceptsStyle: acceptsStyle(program, `${name}Props`) });
     }
+  }
+  // `export default Nom`, `export default withSkeleton(Nom, …)`, `export default memo(Nom)`, `export default function Nom`.
+  for (const stmt of program.body) {
+    if (stmt.type !== 'ExportDefaultDeclaration') continue;
+    const decl = stmt.declaration;
+    let name: string | null = null;
+    if ((decl.type === 'FunctionDeclaration' || decl.type === 'ClassDeclaration') && decl.id) name = decl.id.name;
+    else {
+      let expr = unwrap(decl);
+      while (expr.type === 'CallExpression' && expr.arguments[0]) expr = unwrap(expr.arguments[0]);
+      if (expr.type === 'Identifier') name = expr.name;
+    }
+    if (!name || !/^[A-Z]/.test(name) || out.some((c) => c.name === name)) continue;
+    out.push({ name, file, group, props: requiredProps(program, `${name}Props`), acceptsStyle: acceptsStyle(program, `${name}Props`), exportDefault: true });
   }
   return out;
 }
@@ -45,7 +60,7 @@ function groupOf(file: string): string {
 }
 
 /** Props obligatoires de `interface XProps { … }` ou `type XProps = { … }`. */
-function requiredProps(program: AstNode, typeName: string): ComponentEntry['props'] {
+export function requiredProps(program: AstNode, typeName: string): ComponentEntry['props'] {
   for (const stmt of program.body) {
     const decl = stmt.type === 'ExportNamedDeclaration' && stmt.declaration ? stmt.declaration : stmt;
     let members: AstNode[] | null = null;

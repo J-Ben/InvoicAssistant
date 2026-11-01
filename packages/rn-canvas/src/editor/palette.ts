@@ -4,6 +4,8 @@
  * écrans voisins du même côté.
  */
 export const PALETTE_WIDTH = 236;
+/** Palette dépliée (tous les réglages) : la largeur du panneau de droite. */
+export const PALETTE_WIDE = 320;
 /** Espace entre l'écran et la palette, et entre la palette et l'écran voisin écarté. */
 export const PALETTE_GAP = 16;
 

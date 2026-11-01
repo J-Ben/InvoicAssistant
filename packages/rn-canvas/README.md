@@ -111,7 +111,7 @@ export default {
 ## Utilisation
 
 ```bash
-npm run canvas        # = rn-canvas dev : démarre Expo si besoin, puis l'éditeur
+npm run canvas        # = rn-canvas dev : démarre Expo si besoin, l'éditeur et le moteur de captures
 ```
 
 Ouvrez **http://localhost:7007**.
@@ -165,6 +165,45 @@ Ouvrez **http://localhost:7007**.
 - **Navigation** : un écran du canevas reste affiché seul. Une redirection ou un `router.push` y est ignoré et signalé par une notification.
 - **Un seul onglet** : les écrans partagent leurs bases de données d'un onglet à l'autre ; un deuxième onglet de l'éditeur propose « Utiliser cet onglet ». Avec Brave, si les écrans affichent des erreurs de stockage, désactivez les Shields pour `localhost`.
 
+## Créer un composant ou un écran
+
+**＋ Créer** (barre du canevas, ou ＋ à côté de la recherche du panneau de gauche) écrit les vrais fichiers, aux conventions du projet, et pose le résultat sur le canevas :
+
+- **Nom libre** : `bouton principal`, `carte-facture récente` deviennent `BoutonPrincipal`, `CarteFactureRecente` (accents retirés, casse corrigée). Un nom déjà pris parmi les composants est refusé.
+- **Composant** : un niveau Atomic Design (`atoms`, `molecules`, `organisms`, `templates`…) et, s'il y en a, un sous-dossier de rangement (`molecules/Cards`). **Écran** : un dossier, parmi ceux où sont rangés les écrans de la navigation, ou un autre.
+- **Partir de** : un composant vide, avec ses propriétés (nom, type : texte, nombre, oui/non, couleur, action, contenu ; facultative ; valeur par défaut), ou la **copie** d'un composant ou d'un écran existant (fichiers copiés et renommés, imports relatifs recalculés, l'original n'est pas touché).
+- **Skeleton** : si `react-zero-skeleton` est installé, la forme du composant devient un `SkeletonBox` et l'export passe par `withSkeleton` (avec `mockProps` tirées du premier texte). Sans le paquet, l'option n'apparaît pas.
+- **Sur le canevas** : au centre de la vue, ou à côté de l'écran sélectionné ; ajouté au parcours affiché.
+- L'aperçu de la fenêtre liste les fichiers qui seront écrits et le chemin d'import. Un écran créé n'est **pas** ajouté à la navigation de l'app.
+
+**Conventions détectées, jamais imposées.** La lib lit le projet : dossier qui contient les niveaux Atomic Design, forme d'un composant (dossier par composant, `Nom.props.ts`, `Nom.styles.ts`, `index.ts`, export par défaut ou nommé) d'après la majorité des composants existants, `StyleSheet.create` ou styled-components, alias d'import des `paths` du `tsconfig.json` (`@atoms/…`), guillemets et espaces dans les accolades d'après un fichier existant. `npx rn-canvas doctor` affiche ce qui a été retenu. Pour fixer une valeur :
+
+```json
+{
+  "create": {
+    "componentsRoot": "src/components",
+    "levels": ["atoms", "molecules", "organisms"],
+    "layout": { "folder": true, "propsFile": false, "stylesFile": true, "index": true, "exportDefault": false },
+    "screenDirs": ["src/screens"],
+    "skeleton": false
+  }
+}
+```
+
+**Règle Atomic Design** : un composant ne reçoit que des composants de son niveau ou d'un niveau inférieur ; insérer une molécule dans un atome est refusé, avec la raison. La bibliothèque (onglet Composants, barre du bas) range les composants par niveau, comprend les exports par défaut (`export default withSkeleton(Carte)`) et les props déclarées dans `Nom.props.ts`, et importe un composant rangé dans son dossier par ce dossier (`@atoms/Button`).
+
+## Construire un écran à la main
+
+La barre du bas pose, dans l'élément sélectionné (ou à côté), des **briques** qui se voient tout de suite, comme les formes de Figma :
+
+- **Forme** : une View de 120 × 120, grise, aux coins arrondis (une View vide, elle, ne mesure rien).
+- **Image** : vignettes des images du projet (`assets/`…), ou **Importer une image…**, qui la copie dans les assets et l'insère avec `require(…)`.
+- **Icône** : les icônes Ionicons de `@expo/vector-icons`, dessinées dans le sélecteur, avec une recherche (`home`, `bell`…). Si le paquet manque, la commande d'installation est donnée.
+- **Interrupteur** : un `Switch`.
+- **Mise en page** : rangée, colonne, grille deux colonnes, rangée défilante (pastilles), carte (fond blanc, coins arrondis, ombre douce).
+
+Les styles sont posés sur l'élément ; l'inspecteur les reprend. Il signale aussi un élément **sans surface** (sa taille ne dépasse pas ses bordures : View vide, `flex: 1` dans un parent sans hauteur), avec **Hauteur 120**, **Largeur 100 %** ou **Voir le parent**. L'inspecteur propose aussi une **ombre** toute faite (Aucune, Douce, Moyenne, Forte : `shadow*` pour iOS et le web, `elevation` pour Android) et la **police** (`fontFamily` : celles que le projet charge avec `useFonts` ou `Font.loadAsync`, plus serif et monospace).
+
 ## Piloter les écrans depuis une IA (MCP)
 
 `rn-canvas mcp` lance un serveur [MCP](https://modelcontextprotocol.io) qui donne à une IA les mêmes opérations que l'éditeur. Il n'a pas besoin du navigateur : il travaille directement sur le code.
@@ -210,7 +249,9 @@ Si l'éditeur est ouvert en même temps, il affiche les modifications de l'IA en
 
 `isolateStories` (activé par défaut si l'app tourne sur `localhost`) : chaque écran est servi depuis son propre sous-domaine (`accueil-actuel-1k2j.localhost:8081`), que les navigateurs résolvent vers la machine locale. Chaque écran a ainsi son propre stockage (localStorage, IndexedDB, OPFS) : pas de conflit entre écrans affichés en parallèle, ce qui est indispensable pour expo-sqlite sur le web, dont la base ne s'ouvre que dans un seul onglet à la fois.
 
-**Chargement des écrans.** Chaque écran charge toute l'app dans son cadre. Par défaut, tous les écrans cochés se chargent en même temps, les plus proches de la vue d'abord, et restent chargés : se déplacer sur le canevas ne recharge rien. Chaque écran en cours affiche son étape (« Chargement de l'app », puis « Affichage de l'écran »), un pourcentage estimé et le temps écoulé ; une fois chargé, sa durée de chargement s'affiche à côté de son nom, et un bilan donne le temps total et la moyenne par écran. Pour un projet à très nombreux écrans, décochez « Charger tous les écrans » (menu Affichage) : seuls les écrans autour de la vue se chargent (4 à la fois), une fois la vue arrêtée, et un écran déjà chargé reste en mémoire hors de la vue dans la limite choisie (« Écrans gardés chargés » : 12, 24, 48 ou tous), les moins récemment vus étant libérés au-delà. Le bundle de l'app est le même pour tous les écrans : demandé depuis le sous-domaine d'un écran, il est redirigé vers l'hôte principal (`localhost:8081`) et servi avec un ETag (`RN_CANVAS=1` seulement). Il n'est téléchargé et compilé qu'une fois, puis revalidé (304) tant que le code ne change pas ; la page, donc le stockage, reste celle du sous-domaine, et Fast Refresh fonctionne comme avant. Les panneaux latéraux se masquent par les boutons ‹ › à leur bord, ou ⌘\ pour les deux.
+**Écrans en images.** Par défaut, le canevas n'exécute pas une copie de l'app par écran : `rn-canvas dev` lance un Chrome sans fenêtre (Chrome, Chromium, Brave ou Edge déjà installé, ou celui de `RN_CANVAS_CHROME` ; Node 22 ou plus) qui affiche les écrans un par un, dans un ou deux onglets, et en garde une image. Le canevas montre ces images ; un clic sur un écran le passe **en direct** (inspecter, modifier, mode Interaction), son image restant dessous le temps qu'il s'affiche. Au plus deux écrans tournent en direct : le sélectionné et le précédent. Les écrans visibles sont capturés en premier. Les images sont gardées dans `node_modules/.cache/rn-canvas/snapshots` avec l'empreinte du code de leur écran (fichier canvas, tout ce qu'il importe, `rn-canvas.config.tsx`, fichier de verrouillage des paquets) : relancer l'éditeur ne refait rien, et modifier un composant ne refait que les images des écrans qui l'utilisent. Un écran en boucle de rendu (« Maximum update depth exceeded » répété) est signalé sur son image et, en direct, arrêté par l'éditeur au lieu de bloquer le navigateur. Sur un projet de 89 écrans, le navigateur de l'éditeur reste sous 1 Go, contre plus de 12 Go quand tous les écrans sont chargés en direct.
+
+**Chargement en direct.** Sans moteur de captures (`--no-snapshots`, navigateur Chromium introuvable, Node trop ancien) ou en décochant « Écrans en images » (menu Affichage), chaque écran charge toute l'app dans son cadre. Seuls les écrans autour de la vue se chargent, 4 à la fois, une fois la vue arrêtée, et un écran déjà chargé reste en mémoire hors de la vue dans la limite choisie (« Écrans gardés chargés » : 12, 24, 48 ou tous). « Charger tous les écrans » les charge tous : à réserver aux petits projets, chaque écran gardant une copie de l'app en mémoire. Le bundle de l'app est le même pour tous les écrans : demandé depuis le sous-domaine d'un écran, il est redirigé vers l'hôte principal (`localhost:8081`) et servi avec un ETag (`RN_CANVAS=1` seulement). Il n'est téléchargé et compilé qu'une fois, puis revalidé (304) tant que le code ne change pas ; la page, donc le stockage, reste celle du sous-domaine, et Fast Refresh fonctionne comme avant. Les panneaux latéraux se masquent par les boutons ‹ › à leur bord, ou ⌘\ pour les deux.
 
 ## Fonctionnement
 

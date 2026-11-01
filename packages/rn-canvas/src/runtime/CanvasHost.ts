@@ -4,6 +4,7 @@ import { startInspector, StoryRoot } from './inspector';
 import { hasNavigation, NavigationShell, setNavigation } from './navigation';
 import { RouteParams, setRouteParamsContext } from './params';
 import { blockNetwork } from './network';
+import { watchRenderLoops } from './loop';
 import { hintFor } from './hints';
 
 export { hintFor };
@@ -110,6 +111,8 @@ export function CanvasHost({ storyId, loadManifest }: { storyId: string; loadMan
       const manifest = loadManifest();
       // Pas d'appels réseau vers l'API de l'app depuis un écran du canevas, sauf `network: 'allow'`.
       if (manifest.config?.network !== 'allow') blockNetwork(storyId);
+      // Boucle de rendu : signalée à l'éditeur, qui démonte l'écran plutôt que de laisser le navigateur saturer.
+      watchRenderLoops(storyId);
       if (manifest.router) neutralizeRouter(manifest.router, storyId);
       setRouteParamsContext(manifest.routeParams);
       setNavigation(manifest.router ? null : manifest.navigation, storyId);

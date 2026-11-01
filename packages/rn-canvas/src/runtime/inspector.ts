@@ -28,11 +28,11 @@ interface Fiber {
 const HOST_TAGS = new Set([5, 26, 27]); // HostComponent, HostHoistable, HostSingleton
 
 const COMPUTED_KEYS = [
-  'width', 'height', 'display', 'flexDirection', 'alignItems', 'justifyContent', 'gap',
+  'width', 'height', 'display', 'flexGrow', 'flexDirection', 'position', 'zIndex', 'top', 'left', 'alignItems', 'justifyContent', 'gap',
   'paddingTop', 'paddingRight', 'paddingBottom', 'paddingLeft',
   'marginTop', 'marginRight', 'marginBottom', 'marginLeft',
   'backgroundColor', 'color', 'opacity',
-  'borderTopLeftRadius', 'borderTopWidth', 'borderTopColor',
+  'borderTopLeftRadius', 'borderTopWidth', 'borderTopColor', 'borderBottomWidth', 'borderLeftWidth', 'borderRightWidth',
   'fontSize', 'fontWeight', 'fontFamily', 'lineHeight', 'textAlign',
 ] as const;
 
@@ -97,6 +97,9 @@ function buildTree(root: Fiber): LayerNode[] {
       const parsed = tag && tag !== parentTag ? parseTag(tag) : null;
       if (parsed) {
         const node: LayerNode = { key: `${counter++}`, loc: parsed.loc, name: parsed.name, children: [] };
+        const host = hostNodes(child)[0];
+        const z = host ? Number.parseInt(getComputedStyle(host).zIndex, 10) : Number.NaN;
+        if (Number.isFinite(z) && z !== 0) node.z = z;
         out.push(node);
         visit(child, tag, node.children);
       } else {
@@ -417,7 +420,18 @@ export function startInspector(storyId: string): InspectorHandle {
       const layered = [nodes[0], ...Array.from(nodes[0].children)].map((n) => getComputedStyle(n).backgroundImage).find((v) => v.includes('gradient'));
       if (layered) computed.backgroundImage = layered;
     }
-    return { loc: ancestors[0].loc, name: ancestors[0].name, ancestors, rect: unionRect(nodes), computed };
+    const info: SelectionInfo = { loc: ancestors[0].loc, name: ancestors[0].name, ancestors, rect: unionRect(nodes), computed };
+    const node = nodes[0] as HTMLElement | undefined;
+    if (node) {
+      const style = getComputedStyle(node);
+      info.offset = { left: Math.round(node.offsetLeft - (parseFloat(style.marginLeft) || 0)), top: Math.round(node.offsetTop - (parseFloat(style.marginTop) || 0)) };
+      // Plans parmi les frères (même parent rendu) : `auto` compte pour 0.
+      const zOf = (el: Element) => Number.parseInt(getComputedStyle(el).zIndex, 10) || 0;
+      const siblings = node.parentElement ? Array.from(node.parentElement.children) : [node];
+      const zs = siblings.map(zOf);
+      info.stack = { z: zOf(node), min: Math.min(...zs), max: Math.max(...zs), siblings: siblings.length };
+    }
+    return info;
   };
 
   // Élément demandé par l'éditeur mais pas encore rendu (création, Fast Refresh en cours).
@@ -541,6 +555,12 @@ export function startInspector(storyId: string): InspectorHandle {
       const e = event as PointerEvent;
       const fiber = pickAt(e.clientX, e.clientY, e.altKey ? 'exact' : 'level');
       const tag = fiber ? parseTag(tagOf(fiber)!) : null;
+      // Élément sélectionné en position libre : le glisser le déplace (left / top) au lieu de le réordonner.
+      const host = fiber && tag?.loc === selected ? (hostNodes(fiber)[0] as HTMLElement | undefined) : undefined;
+      if (host && getComputedStyle(host).position === 'absolute') {
+        handles.startMove(e, host);
+        return;
+      }
       drag = fiber && tag ? { fiber, loc: tag.loc, name: tag.name, x: e.clientX, y: e.clientY, active: false } : null;
     }
     if (event.type === 'pointerup' && drag) {
@@ -622,10 +642,12 @@ export function startInspector(storyId: string): InspectorHandle {
     if (target?.isContentEditable || target?.closest?.('input, textarea, [contenteditable]')) return;
     const combo = event.metaKey || event.ctrlKey;
     const arrow = event.key.startsWith('Arrow');
-    const relayed = combo ? ['z', 'y', 'd'].includes(event.key.toLowerCase()) || arrow : (event.altKey && arrow) || ['Delete', 'Backspace', 'Escape', 'v', 'i'].includes(event.key);
+    // ⌘[ / ⌘] : plans (touche physique : ces caractères changent d'une disposition de clavier à l'autre).
+    const bracket = event.code === 'BracketLeft' || event.code === 'BracketRight';
+    const relayed = combo ? ['z', 'y', 'd'].includes(event.key.toLowerCase()) || arrow || bracket : (event.altKey && arrow) || ['Delete', 'Backspace', 'Escape', 'v', 'i'].includes(event.key);
     if (!relayed) return;
     event.preventDefault();
-    post({ type: 'key', key: event.key, metaKey: event.metaKey, ctrlKey: event.ctrlKey, shiftKey: event.shiftKey, altKey: event.altKey });
+    post({ type: 'key', key: event.key, code: event.code, metaKey: event.metaKey, ctrlKey: event.ctrlKey, shiftKey: event.shiftKey, altKey: event.altKey });
   };
   window.addEventListener('keydown', onKey, true);
 

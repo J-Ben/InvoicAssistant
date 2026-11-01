@@ -9,6 +9,7 @@ export function CommitInput({
   multiline,
   list,
   className,
+  autoFocus,
 }: {
   value: string;
   onCommit: (value: string) => void;
@@ -17,6 +18,7 @@ export function CommitInput({
   multiline?: boolean;
   list?: string;
   className?: string;
+  autoFocus?: boolean;
 }) {
   const [draft, setDraft] = useState(value);
   useEffect(() => setDraft(value), [value]);
@@ -55,6 +57,7 @@ export function CommitInput({
       placeholder={placeholder}
       disabled={disabled}
       list={list}
+      autoFocus={autoFocus}
       spellCheck={false}
       onChange={(e) => setDraft(e.target.value)}
       onBlur={commit}
@@ -241,5 +244,50 @@ export function TokenPicker({ tokens, value, onPick }: { tokens: { path: string;
         </option>
       ))}
     </select>
+  );
+}
+
+/** Composant sans prop `style` : un style posé sur l'instance serait sans effet ; on propose de l'ajouter. */
+export interface Styleless {
+  name: string;
+  onAdd: () => void;
+}
+
+export function StylelessNotice({ styleless }: { styleless: Styleless }) {
+  return (
+    <div className="notice styleless">
+      <b>{styleless.name}</b> n'accepte pas de prop <code>style</code> : un style posé ici n'aurait aucun effet à l'écran.
+      <div className="zero-size-actions">
+        <button onClick={styleless.onAdd} title={`Ajoute style au type de ${styleless.name}, à ses paramètres, et le fusionne avec le style de son élément racine`}>
+          Ajouter la prop style à {styleless.name}
+        </button>
+      </div>
+      <span className="muted small">Ou double-cliquez sur l'élément pour modifier le composant lui-même (toutes ses instances).</span>
+    </div>
+  );
+}
+
+/**
+ * Élément d'un composant du projet : modifier cet endroit seulement (l'instance, dans l'écran) ou le
+ * composant lui-même (toutes ses instances). Un clic sélectionne l'un ou l'autre.
+ */
+export interface InstanceScope {
+  component: string;
+  file: string;
+  scope: 'instance' | 'all';
+  onInstance: () => void;
+  onAll: () => void;
+}
+
+export function InstanceSwitch({ value }: { value: InstanceScope }) {
+  return (
+    <div className="segmented instance-switch" role="group" aria-label="Portée de la modification">
+      <button className={value.scope === 'instance' ? 'on' : ''} onClick={value.onInstance} title="Ne modifier que cet endroit de l'écran (props et style de l'instance)">
+        Cette instance
+      </button>
+      <button className={value.scope === 'all' ? 'on' : ''} onClick={value.onAll} title={`Modifier ${value.component} lui-même, dans ${value.file} : toutes ses instances changent`}>
+        Toutes ({value.component})
+      </button>
+    </div>
   );
 }

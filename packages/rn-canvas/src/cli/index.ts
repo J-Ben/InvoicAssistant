@@ -22,6 +22,8 @@ import { addBabelPlugin } from './patch.ts';
 import { proposeProviders, rootComponentFile, skeletonConfig } from '../server/scaffold.ts';
 import { examplesFile } from '../server/examples.ts';
 import { writeShim } from '../server/shim.ts';
+import { engineUnavailable } from '../server/cdp.ts';
+import { SnapshotEngine } from '../server/snapshots.ts';
 import { BABEL_PLUGIN_ENTRY, METRO_TEMPLATE, analyzeEntry, manifestSpecifier, patchEntry, patchLayout, patchMetro } from '../server/setup.ts';
 
 const EDITOR_DIR = fileURLToPath(new URL('./editor', import.meta.url));
@@ -55,6 +57,7 @@ function help() {
   rn-canvas init                 Branche le projet courant
   rn-canvas dev [--port 7007]    Lance l'éditeur ; démarre Expo si l'app ne répond pas
               [--no-app]         … sans démarrer Expo
+              [--no-snapshots]   … sans captures : chaque écran se charge en direct
   rn-canvas generate             Régénère le manifeste des stories
   rn-canvas screens              Crée un écran du canevas pour chaque route (app/ ou <Stack.Screen>) qui n'en a pas
   rn-canvas examples             Génère les données d'exemple des composants à partir des types de leurs props
@@ -164,7 +167,13 @@ async function dev() {
   const port = Number(flag('port') === true ? 7007 : (flag('port') ?? 7007));
   project.writeManifest();
 
-  const server = await startServer(project, { port, editorDir: EDITOR_DIR });
+  const snapshots: { current: SnapshotEngine | null } = { current: null };
+  const server = await startServer(project, { port, editorDir: EDITOR_DIR, snapshots });
+  // Captures des écrans (Chrome sans fenêtre) : le canevas montre leurs images, un seul écran tourne en direct.
+  if (!flag('no-snapshots')) {
+    snapshots.current = new SnapshotEngine(project, server.notify);
+    if (!snapshots.current.available) log(`\x1b[33mCaptures indisponibles\x1b[0m : ${engineUnavailable()} Les écrans se chargeront en direct.`);
+  }
 
   // Exemples générés (si le projet les utilise) : remis à jour en arrière-plan, pour les nouveaux composants.
   if (fs.existsSync(path.join(root, examplesFile(project.config.include)))) {
@@ -185,6 +194,10 @@ async function dev() {
     if (!fs.existsSync(abs)) continue;
     fs.watch(abs, { recursive: dir !== '.' }, (_event, filename) => {
       const name = String(filename ?? '');
+      // Tout fichier source : les captures des écrans qui en dépendent sont à refaire.
+      if (/\.(tsx?|jsx?|json|svg|png|jpe?g|webp|ttf|otf)$/.test(name) && !name.split(path.sep).includes('node_modules')) {
+        snapshots.current?.fileChanged(path.relative(root, path.join(abs, name)).split(path.sep).join('/'));
+      }
       if (!/\.canvas\.(tsx|ts|jsx|js)$/.test(name) && path.basename(name) !== path.basename(project.config.runtimeConfig)) return;
       clearTimeout(timer);
       timer = setTimeout(() => {
@@ -208,14 +221,35 @@ async function dev() {
   }
 
   log(`Éditeur prêt : \x1b[1m${server.url}\x1b[0m (app : ${project.config.appUrl})`);
+  // Titre de l'onglet du terminal : l'adresse reste visible même quand les logs défilent.
+  if (process.stdout.isTTY || process.env.TERM) process.stdout.write(`\x1b]0;rn-canvas · ${server.url.replace(/^https?:\/\//, '')}\x07`);
+  // Expo écrit ensuite son QR code, son menu (dont sa propre adresse, celle de l'app) et ses logs : la ligne
+  // ci-dessus disparaît. Une fois l'app prête, l'adresse de l'éditeur est réaffichée, bien en vue.
+  if (expo) {
+    void (async () => {
+      for (let i = 0; i < 150 && !(await reachable(project.config.appUrl)); i++) await new Promise((r) => setTimeout(r, 2000));
+      // Laisser Expo finir d'écrire son menu.
+      await new Promise((r) => setTimeout(r, 1500));
+      banner(server.url, project.config.appUrl);
+    })();
+  }
 
   const stop = async () => {
     expo?.kill('SIGINT');
+    await snapshots.current?.close();
     await server.close();
     process.exit(0);
   };
   process.on('SIGINT', stop);
   process.on('SIGTERM', stop);
+}
+
+/** Cadre avec l'adresse de l'éditeur, à ne pas confondre avec celle de l'app qu'affiche Expo. */
+function banner(editorUrl: string, appUrl: string) {
+  const lines = [`rn-canvas : ouvrez l'éditeur sur  ${editorUrl}`, `(${appUrl} est l'app affichée dans le canevas, pas l'éditeur)`];
+  const width = Math.max(...lines.map((l) => l.length)) + 4;
+  const pad = (l: string) => `│ ${l}${' '.repeat(width - l.length - 4)} │`;
+  console.log(['', `┌${'─'.repeat(width - 2)}┐`, `\x1b[1m\x1b[35m${pad(lines[0])}\x1b[0m`, pad(lines[1]), `└${'─'.repeat(width - 2)}┘`, ''].join('\n'));
 }
 
 /** Expo tourne-t-il avec les remplacements web (marqueur exposé par withRnCanvas) ? */

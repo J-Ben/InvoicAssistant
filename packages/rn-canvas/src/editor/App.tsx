@@ -1,26 +1,31 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { CanvasMode, ComponentEntry, EditValue, StyleTarget, EditorMessage, EditRequest, FlowLink, HistoryState, InsertPosition, InspectResult, LayerNode, Payload, ProjectInfo, Rect, RuntimeMessage, SelectionInfo } from '../shared/protocol.ts';
+import type { CanvasMode, ComponentEntry, EditValue, StyleTarget, EditorMessage, EditRequest, FlowLink, HistoryState, InsertPosition, InspectResult, LayerNode, Payload, ProjectInfo, Rect, RuntimeMessage, SelectionInfo, SnapshotStatus, CreateInfo, SnippetRequest } from '../shared/protocol.ts';
 import { api } from './api.ts';
-import { Canvas, DEVICES, type Device, type LoadState } from './Canvas.tsx';
-import { parseLoc } from '../shared/protocol.ts';
+import { Canvas, DEVICES, TOOL_KEY, TOPBAR_BOARD_SLOT, readTool, type Device, type LoadState, type Tool } from './Canvas.tsx';
+import { SNIPPET_ROOT, parseLoc } from '../shared/protocol.ts';
 import { useEditorTab } from './tab.ts';
 import { ContextMenu } from './ContextMenu.tsx';
 import { Inspector } from './Inspector.tsx';
-import { CONTAINERS, Sidebar, takeDraggedComponent } from './Sidebar.tsx';
+import { CONTAINERS, Sidebar, takeDraggedComponent, SEARCH_INPUT_ID, SIDEBAR_TAB_EVENT } from './Sidebar.tsx';
 import { LibraryBar } from './LibraryBar.tsx';
 import { PagesBar, useBoard } from './Pages.tsx';
+import { BranchMenu } from './BranchMenu.tsx';
+import { MemoryBadge } from './MemoryBadge.tsx';
 import { SelectionToolbar } from './SelectionToolbar.tsx';
 import { defaultTarget, mergedStyle, styleEntries } from './styleModel.ts';
-import { numberOf } from './fields.tsx';
+import { type InstanceScope, numberOf, type Styleless } from './fields.tsx';
 import type { FlowMode } from './Flows.tsx';
 import { DisplayMenu, useDisplay } from './display.tsx';
+import { CreateDialog, type Placement } from './CreateDialog.tsx';
 
 type ThemePref = 'system' | 'light' | 'dark';
+export type Restack = 'front' | 'forward' | 'backward' | 'back';
 /** Version et date de construction, injectées par build.mjs. */
 declare const __RNC_BUILD__: string | undefined;
 
 const THEME_KEY = 'rn-canvas:theme';
-const THEME_LABEL: Record<ThemePref, string> = { system: '◐ Système', light: '☀ Clair', dark: '☾ Sombre' };
+const THEME_LABEL: Record<ThemePref, string> = { system: 'Système', light: 'Clair', dark: 'Sombre' };
+const THEME_ICON: Record<ThemePref, string> = { system: '◐', light: '☀', dark: '☾' };
 /**
  * Délai après lequel un écran prêt mais toujours vide est considéré comme chargé (rendu null,
  * redirection…). Long : plusieurs écrans qui ouvrent leur base en parallèle peuvent mettre 30 s.
@@ -38,7 +43,7 @@ function readGenerations(): Record<string, number> {
     return {};
   }
 }
-const STRUCTURAL = new Set<EditRequest['op']>(['remove', 'duplicate', 'move', 'insert']);
+const STRUCTURAL = new Set<EditRequest['op']>(['remove', 'duplicate', 'move', 'insert', 'insertSnippet']);
 
 function readThemePref(): ThemePref {
   try {
@@ -61,12 +66,21 @@ export function App() {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [hidden, setHidden] = useState<Set<string>>(new Set());
   const [mode, setMode] = useState<CanvasMode>('inspect');
+  // Outil du canevas (Sélection, Main) : avec le mode, il forme les trois outils de la barre du haut.
+  const [tool, setToolState] = useState<Tool>(readTool);
+  const setTool = useCallback((next: Tool) => {
+    setToolState(next);
+    if (next === 'hand') setMode('inspect');
+    try {
+      localStorage.setItem(TOOL_KEY, next);
+    } catch {
+      // Stockage indisponible : l'outil vaut pour la session.
+    }
+  }, []);
   const [display, setDisplay, resetDisplay] = useDisplay();
-  const [device, setDevice] = useState<Device>(DEVICES[0]);
+  const [device, setDevice] = useState<Device>(() => DEVICES.find((d) => d.id === 'iphone-15') ?? DEVICES[0]);
   const [trees, setTrees] = useState<Record<string, LayerNode[]>>({});
   const [storyErrors, setStoryErrors] = useState<Record<string, string>>({});
-  // Démarrage de l'app dans chaque écran (message « ready ») : étape du chargement affichée sur le cadre.
-  const [readyAt, setReadyAt] = useState<Record<string, number>>({});
   // Appels réseau coupés par écran (hôtes distincts), affichés sur son cadre.
   const [blocked, setBlocked] = useState<Record<string, { count: number; hosts: string[] }>>({});
   const [loaded, setLoaded] = useState<Record<string, LoadState>>({});
@@ -84,7 +98,6 @@ export function App() {
     window.clearTimeout(graceTimers.current.get(id));
     graceTimers.current.delete(id);
     setLoaded(({ [id]: _, ...rest }) => rest);
-    setReadyAt(({ [id]: _, ...rest }) => rest);
   }, []);
   // Écrans passés sur un stockage neuf ; mémorisé pour retrouver leurs données à la session suivante.
   const [generations, setGenerations] = useState<Record<string, number>>(readGenerations);
@@ -113,6 +126,33 @@ export function App() {
   const [flowRects, setFlowRects] = useState<Record<string, Record<string, Rect>>>({});
   const modeRef = useRef(mode);
   modeRef.current = mode;
+  // Captures des écrans (moteur du serveur) pour l'appareil affiché.
+  const [snapStatus, setSnapStatus] = useState<SnapshotStatus | null>(null);
+  const deviceRef = useRef(device);
+  deviceRef.current = device;
+  const snapTimer = useRef<number | undefined>(undefined);
+  const loadSnapshots = useCallback((delay = 0) => {
+    window.clearTimeout(snapTimer.current);
+    snapTimer.current = window.setTimeout(() => {
+      const { width, height } = deviceRef.current;
+      api.snapshots(width, height).then(setSnapStatus, () => setSnapStatus(null));
+    }, delay);
+  }, []);
+  useEffect(() => loadSnapshots(), [device, loadSnapshots]);
+  const priorityTimer = useRef<number | undefined>(undefined);
+  const prioritize = useCallback((ids: string[]) => {
+    window.clearTimeout(priorityTimer.current);
+    priorityTimer.current = window.setTimeout(() => {
+      const { width, height } = deviceRef.current;
+      api.snapshotPriority(width, height, ids).catch(() => {});
+    }, 200);
+  }, []);
+  // Écrans en boucle de rendu (signalés par le runtime) : démontés jusqu'à une nouvelle sélection.
+  const [looping, setLooping] = useState<Set<string>>(new Set());
+  const activate = useCallback((id: string) => {
+    setLooping((l) => (l.has(id) ? new Set([...l].filter((x) => x !== id)) : l));
+    setActiveStory(id);
+  }, []);
 
   const loadProject = useCallback(() => {
     api
@@ -130,13 +170,17 @@ export function App() {
 
   useEffect(() => {
     loadProject();
-    const stop = api.events((type) => type === 'stories' && loadProject());
+    const stop = api.events((type) => {
+      if (type === 'stories') loadProject();
+      // Une capture faite ou en cours : état relu (regroupé, pour ne pas relire à chaque image).
+      loadSnapshots(type === 'stories' ? 0 : 250);
+    });
     window.addEventListener('focus', loadProject);
     return () => {
       stop();
       window.removeEventListener('focus', loadProject);
     };
-  }, [loadProject]);
+  }, [loadProject, loadSnapshots]);
 
   const stories = useMemo(() => project?.stories.flatMap((g) => g.stories) ?? [], [project]);
   // Pages : la vue d'ensemble montre les écrans cochés, un parcours ceux qu'il reprend (dans son ordre).
@@ -213,12 +257,16 @@ export function App() {
       if (data?.source !== 'rn-canvas') return;
       switch (data.type) {
         case 'ready':
-          setReadyAt((r) => ({ ...r, [data.story]: Date.now() }));
           send(data.story, { type: 'mode', mode: modeRef.current });
           setStoryErrors(({ [data.story]: _, ...rest }) => rest);
           // Un écran qui reste vide (rendu null) ne doit pas garder l'indicateur indéfiniment.
           window.clearTimeout(graceTimers.current.get(data.story));
           graceTimers.current.set(data.story, window.setTimeout(() => markLoaded(data.story, 'empty'), LOAD_GRACE));
+          break;
+        case 'loop':
+          setLooping((l) => new Set([...l, data.story]));
+          setStoryErrors((e) => ({ ...e, [data.story]: `Boucle de rendu (${data.count} × « Maximum update depth exceeded ») : écran arrêté pour ne pas bloquer le navigateur. Cliquez sur son image pour réessayer.` }));
+          resetLoad(data.story);
           break;
         case 'tree':
           setTrees((t) => ({ ...t, [data.story]: data.tree }));
@@ -312,7 +360,10 @@ export function App() {
             send(data.story, { type: 'style-applied', ok: false });
             break;
           }
-          writeStyleRef.current(data.key, { kind: 'literal', value: data.value }).then((ok) => send(data.story, { type: 'style-applied', ok }));
+          const written = data.more?.length
+            ? writeStylesRef.current([{ key: data.key, value: data.value }, ...data.more].map((e) => ({ key: e.key, value: { kind: 'literal' as const, value: e.value } })))
+            : writeStyleRef.current(data.key, { kind: 'literal', value: data.value });
+          written.then((ok) => send(data.story, { type: 'style-applied', ok }));
           break;
         }
         case 'text-edit': {
@@ -325,7 +376,7 @@ export function App() {
           break;
         case 'key':
           // Rejoue le raccourci dans l'éditeur, comme s'il avait été tapé ici.
-          window.dispatchEvent(new KeyboardEvent('keydown', { key: data.key, metaKey: data.metaKey, ctrlKey: data.ctrlKey, shiftKey: data.shiftKey, altKey: data.altKey }));
+          window.dispatchEvent(new KeyboardEvent('keydown', { key: data.key, code: data.code, metaKey: data.metaKey, ctrlKey: data.ctrlKey, shiftKey: data.shiftKey, altKey: data.altKey }));
           break;
       }
     };
@@ -358,14 +409,38 @@ export function App() {
         const show = !(displayRef.current.leftPanel || displayRef.current.rightPanel);
         setDisplay('leftPanel', show);
         setDisplay('rightPanel', show);
+      } else if ((e.metaKey || e.ctrlKey) && (e.code === 'BracketRight' || e.code === 'BracketLeft')) {
+        // ⌘] / ⌘[ : avancer / reculer d'un plan ; avec ⌥ : premier plan / arrière-plan.
+        e.preventDefault();
+        const up = e.code === 'BracketRight';
+        restackRef.current(e.altKey ? (up ? 'front' : 'back') : up ? 'forward' : 'backward');
       } else if (e.key === 'v') setMode('inspect');
-      else if (e.key === 'i') setMode('interact');
+      else if (e.key === 'i') {
+        setMode('interact');
+        setTool('select');
+      }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [send, setDisplay]);
   const displayRef = useRef(display);
   displayRef.current = display;
+  // ⌘K, Ctrl+K ou « / » : la recherche du panneau de gauche (rouvert s'il était masqué).
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const typing = (e.target as HTMLElement)?.closest?.('input, textarea, select, [contenteditable="true"]');
+      if (!(((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') || (e.key === '/' && !typing))) return;
+      e.preventDefault();
+      if (!displayRef.current.leftPanel) setDisplay('leftPanel', true);
+      window.setTimeout(() => {
+        const input = document.getElementById(SEARCH_INPUT_ID) as HTMLInputElement | null;
+        input?.focus();
+        input?.select();
+      }, 0);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [setDisplay]);
 
   /** Clic dans le vide du canevas : on sort de la sélection (palette, poignées, inspecteur). */
   const clearSelection = useCallback(() => {
@@ -396,13 +471,13 @@ export function App() {
             setSelection(null);
             send(null, { type: 'select', loc: null });
           } else if (story) {
-            const name = request.op === 'insert' ? request.component.name : 'name' in request ? request.name : '';
+            const name = request.op === 'insert' ? request.component.name : request.op === 'insertSnippet' ? SNIPPET_ROOT[request.snippet.kind] : 'name' in request ? request.name : '';
             selectLoc(story, result.loc, name || undefined);
             // Sélection mise à jour tout de suite (nouvel emplacement renvoyé par le serveur) : une action
             // enchaînée avant le rendu de l'écran ne doit pas viser un emplacement périmé.
             inspect(story, { loc: result.loc, name, ancestors: [{ loc: result.loc, name }], rect: null, computed: {} });
           }
-          if (request.op === 'insert') loadProject();
+          if (request.op === 'insert' || request.op === 'insertSnippet') loadProject();
         } else if (selection && result.loc) {
           const loc = result.loc;
           const fresh = await api.inspect(loc, selection.info.name);
@@ -442,6 +517,39 @@ export function App() {
   );
   const writeStyleRef = useRef(writeStyle);
   writeStyleRef.current = writeStyle;
+  // Plusieurs propriétés d'un coup (coin de taille : largeur et hauteur) : une seule modification à annuler.
+  const writeStyles = useCallback(
+    (values: { key: string; value: EditValue }[]) => {
+      const target = selection?.inspect;
+      if (!selection || !target) return Promise.resolve(false);
+      const entries = values.flatMap((v) => styleEntries(target, styleTarget, v.key, v.value));
+      const { loc, name } = selection.info;
+      return edit({ op: 'setStyles', loc, name, entries, target: styleTarget });
+    },
+    [selection, styleTarget, edit],
+  );
+  const writeStylesRef = useRef(writeStyles);
+  writeStylesRef.current = writeStyles;
+
+  // Plans (zIndex) : premier plan / avancer / reculer / arrière-plan, parmi les frères de l'élément.
+  const restack = useCallback(
+    (how: Restack) => {
+      const stack = selection?.info.stack;
+      if (!stack || !selection?.inspect?.style.editable) return;
+      const { z, min, max } = stack;
+      const flat = min === max;
+      const next = how === 'forward' ? z + 1 : how === 'backward' ? z - 1 : how === 'front' ? (z < max || flat ? max + 1 : z) : z > min || flat ? min - 1 : z;
+      if (next === z) return;
+      const loc = selection.info.loc;
+      void writeStyle('zIndex', next === 0 ? { kind: 'remove' } : { kind: 'literal', value: next }).then((ok) => {
+        // L'écran ne renvoie pas la sélection après l'écriture : le plan suivant part de la nouvelle valeur.
+        if (ok) setSelection((s) => (s && s.info.loc === loc ? { ...s, info: { ...s.info, stack: { ...stack, z: next, min: Math.min(min, next), max: Math.max(max, next) } } } : s));
+      });
+    },
+    [selection, writeStyle],
+  );
+  const restackRef = useRef(restack);
+  restackRef.current = restack;
   const selectionRef = useRef(selection);
   selectionRef.current = selection;
 
@@ -460,9 +568,12 @@ export function App() {
         padding: editable,
         margin: editable,
         gap: editable,
-        width: editable && merged.has('width'),
-        height: editable && merged.has('height'),
+        // Taille : sur tout élément qui n'est pas un texte, même sans largeur ni hauteur écrites (une carte
+        // posée sans taille n'avait aucune poignée de taille, et l'on tirait à la place celle de la marge).
+        width: editable && (merged.has('width') || !target.text),
+        height: editable && (merged.has('height') || !target.text),
         text: display.handles && Boolean(target.text?.editable),
+        fontSize: editable && Boolean(target.text),
       },
     });
   }, [selection, send, display.handles]);
@@ -531,6 +642,15 @@ export function App() {
   const insertTargetLabel = insertTarget && `${insertTarget.position === 'inside' ? 'dans' : 'après'} <${insertTarget.name}>`;
   // « Ouvrir en grand » : écran du composant créé (ou retrouvé), puis la vue s'y déplace.
   const [reveal, setReveal] = useState<{ id: string; seq: number } | null>(null);
+  // Fenêtre « Créer » : conventions du projet lues à l'ouverture (elles suivent le code).
+  const [creating, setCreating] = useState<CreateInfo | null>(null);
+  // Polices chargées par le projet, proposées pour fontFamily dans l'inspecteur.
+  const [fonts, setFonts] = useState<string[]>([]);
+  useEffect(() => {
+    if (project) api.fonts().then(setFonts, () => setFonts([]));
+  }, [project]);
+  const [place, setPlace] = useState<{ id: string; mode: Placement; anchor: string | null; seq: number } | null>(null);
+  const openCreate = () => api.conventions().then(setCreating, (e: Error) => showError(e.message));
   const openComponentScreen = async (c: ComponentEntry) => {
     if (!c.file) return;
     try {
@@ -547,6 +667,10 @@ export function App() {
   const insertComponent = (c: ComponentEntry) => {
     if (!insertTarget) return;
     edit({ op: 'insert', loc: insertTarget.loc, name: insertTarget.name, position: insertTarget.position, component: { name: c.name, file: c.file } });
+  };
+  const insertSnippet = (snippet: SnippetRequest) => {
+    if (!insertTarget) return;
+    edit({ op: 'insertSnippet', loc: insertTarget.loc, name: insertTarget.name, position: insertTarget.position, snippet });
   };
 
   // ⌘Z / ⇧⌘Z (ou ⌘Y) : annuler / rétablir. Dans un champ de saisie, on laisse l'annulation du champ.
@@ -594,7 +718,91 @@ export function App() {
     return () => window.clearTimeout(t);
   }, [toast]);
 
-  // Palette contextuelle à côté de l'écran de la sélection (mode Sélection).
+  // Palette contextuelle : en haut du panneau de droite quand il est ouvert, sinon à côté de l'écran.
+  // Instance d'un composant du projet sans prop `style` : ses réglages de style seraient sans effet.
+  const styleless = useMemo<Styleless | null>(() => {
+    const name = selection?.inspect?.name;
+    const matches = name && project ? project.components.filter((c) => c.file && c.name === name) : [];
+    if (matches.length !== 1 || matches[0].acceptsStyle !== false) return null;
+    const entry = matches[0];
+    return {
+      name: entry.name,
+      onAdd: () => {
+        void Promise.resolve(edit({ op: 'addStyleProp', file: entry.file!, name: entry.name })).then(loadProject);
+      },
+    };
+  }, [selection?.inspect?.name, project, edit, loadProject]);
+
+  // Élément d'un composant du projet : bascule entre l'instance (dans l'écran) et sa définition.
+  const instanceScope = useMemo<InstanceScope | null>(() => {
+    if (!selection?.inspect || !project) return null;
+    const { info, story } = selection;
+    const fileOf = (loc: string) => loc.split(':')[0];
+    const screenFile = fileOf(info.ancestors[info.ancestors.length - 1]?.loc ?? info.loc);
+    if (fileOf(info.loc) !== screenFile) {
+      // Dans la définition : l'instance est le premier ancêtre écrit dans l'écran.
+      const instance = info.ancestors.slice(1).find((a) => fileOf(a.loc) === screenFile);
+      if (!instance) return null;
+      return { component: instance.name, file: fileOf(info.loc), scope: 'all', onInstance: () => selectLoc(story, instance.loc), onAll: () => {} };
+    }
+    // Sur l'instance : la définition commence au premier calque écrit dans le fichier du composant.
+    const entries = project.components.filter((c) => c.file && c.name === info.name);
+    if (entries.length !== 1) return null;
+    const file = entries[0].file!;
+    const find = (nodes: LayerNode[]): LayerNode | null => {
+      for (const n of nodes) if (n.loc === info.loc) return n; else { const f = find(n.children); if (f) return f; }
+      return null;
+    };
+    const first = (n: LayerNode): LayerNode | null => {
+      for (const c of n.children) if (fileOf(c.loc) === file) return c; else { const f = first(c); if (f) return f; }
+      return null;
+    };
+    const node = find(trees[story] ?? []);
+    const definition = node && first(node);
+    if (!definition) return null;
+    return { component: info.name, file, scope: 'instance', onInstance: () => {}, onAll: () => selectLoc(story, definition.loc) };
+  }, [selection, project, trees, selectLoc]);
+
+  // Inspecteur complet : panneau de droite, ou déplié dans la palette quand ce panneau est fermé.
+  const inspector = (embedded: boolean) => (
+    <Inspector
+      embedded={embedded}
+      styleless={styleless}
+      instanceScope={instanceScope}
+      fonts={fonts}
+      selection={selection}
+      palette={!embedded && paletteVisible ? palette(true) : null}
+      liveRect={selection && selectionRect?.story === selection.story && selectionRect.loc === selection.info.loc ? selectionRect.rect : null}
+      theme={project!.theme}
+      root={project!.root}
+      onSelectAncestor={(loc) => selection && selectLoc(selection.story, loc)}
+      onEdit={edit}
+      target={styleTarget}
+      onTarget={(t) => selection?.inspect && setTargets((all) => ({ ...all, [selection.inspect!.loc]: t }))}
+    />
+  );
+
+  const palette = (docked: boolean) =>
+    selection?.inspect && selectionRect?.rect ? (
+      <SelectionToolbar
+        docked={docked}
+        onRestack={restack}
+        styleless={styleless}
+        instanceScope={instanceScope}
+        selection={selection}
+        rect={selectionRect.rect}
+        frame={frames.current.get(selection.story)!}
+        theme={project?.theme ?? null}
+        target={styleTarget}
+        onEdit={edit}
+        onStyle={(key, value) => writeStyle(key, value)}
+        onMore={() => document.getElementById('inspector-style')?.scrollIntoView({ behavior: 'smooth', block: 'start' })}
+        more={docked ? undefined : inspector(true)}
+        onOpenPanel={docked ? undefined : () => setDisplay('rightPanel', true)}
+      />
+    ) : null;
+
+  // Palette contextuelle de la sélection (mode Sélection).
   const paletteVisible = Boolean(
     display.palette &&
     mode === 'inspect' &&
@@ -619,52 +827,85 @@ export function App() {
   return (
     <div className="app" style={{ gridTemplateColumns: `${display.leftPanel ? '260px' : '0'} 1fr ${display.rightPanel ? '320px' : '0'}` }}>
       <header className="topbar">
-        <div className="brand">
-          <span className="logo">◆</span> rn-canvas <span className="muted">/ {project.name}</span>
-          <span className="build" title="Version de l'éditeur">{typeof __RNC_BUILD__ === 'string' ? __RNC_BUILD__ : 'dev'}</span>
+        <div className="topbar-zone left">
+          <div className="brand">
+            <span className="logo" title="rn-canvas">◆</span> {project.name}
+            <span className="build" title="Version de l'éditeur">{typeof __RNC_BUILD__ === 'string' ? __RNC_BUILD__ : 'dev'}</span>
+          </div>
+          <BranchMenu onError={(text) => setToast({ kind: 'error', text })} />
+          {board && page && display.pagesBar && (<PagesBar
+            board={board}
+            page={page}
+            onSelect={boardState.setPageId}
+            onAdd={(name) => boardState.addPage(name)}
+            onRename={(id, name) => boardState.updatePage(id, (p) => ({ ...p, name }))}
+            onRemove={boardState.removePage}
+            />
+          )}
         </div>
-        <div className="segmented" role="group" aria-label="Mode">
-          <button className={mode === 'inspect' ? 'on' : ''} onClick={() => setMode('inspect')} title="Sélectionner des éléments (V)">
-            Sélection
-          </button>
-          <button className={mode === 'interact' ? 'on' : ''} onClick={() => setMode('interact')} title="Utiliser l'app normalement (I)">
-            Interaction
-          </button>
+        <div className="topbar-zone center">
+          <div className="segmented tools" role="group" aria-label="Outil">
+            <button className={mode === 'inspect' && tool === 'select' ? 'on' : ''} onClick={() => (setMode('inspect'), setTool('select'))} title="Sélection (V) : choisir un élément d'un écran, déplacer des écrans" aria-label="Sélection">
+              <svg viewBox="0 0 24 24" width="17" height="17" aria-hidden="true"><path d="M5 3l14 8-6.2 1.6L9.5 19z" fill="currentColor" /></svg>
+            </button>
+            <button className={mode === 'inspect' && tool === 'hand' ? 'on' : ''} onClick={() => setTool('hand')} title="Main (H, ou maintenir Espace) : se déplacer sur le canevas" aria-label="Main">
+              <svg viewBox="0 0 24 24" width="17" height="17" aria-hidden="true"><path d="M8 11V5.5a1.5 1.5 0 013 0V11m0-1V4.5a1.5 1.5 0 013 0V11m0-.5V6a1.5 1.5 0 013 0v7.5c0 4-2.5 7-6.5 7-3 0-4.6-1.6-6-4l-2.3-4a1.4 1.4 0 012.3-1.6L8 13V8.5a1.5 1.5 0 013 0" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" /></svg>
+            </button>
+            <button className={mode === 'interact' ? 'on' : ''} onClick={() => (setMode('interact'), setTool('select'))} title="Interaction (I) : utiliser l'app normalement (taper, naviguer)" aria-label="Interaction">
+              <svg viewBox="0 0 24 24" width="17" height="17" aria-hidden="true"><path d="M9 11.5V5a1.5 1.5 0 013 0v5.5l4.3.9a2 2 0 011.6 2.2l-.6 4.6A3 3 0 0114.3 21h-3.1a3 3 0 01-2.4-1.2l-3.3-4.4a1.5 1.5 0 012.2-2L9 14.5M6.5 7.5a4 4 0 017.6-1.8" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" /></svg>
+            </button>
+            {/* Flux : s'allume et s'éteint, sans changer d'outil. */}
+            <span className="tools-separator" />
+            <button className={`toggle ${showFlows ? 'on' : ''}`} aria-pressed={showFlows} onClick={() => setShowFlows((v) => !v)} title="Flux : afficher les liens de navigation entre écrans" aria-label="Flux">
+              <svg viewBox="0 0 24 24" width="17" height="17" aria-hidden="true"><rect x="3" y="4" width="6" height="6" rx="1.5" fill="none" stroke="currentColor" strokeWidth="1.6" /><rect x="15" y="14" width="6" height="6" rx="1.5" fill="none" stroke="currentColor" strokeWidth="1.6" /><path d="M9 7h3.5a2.5 2.5 0 012.5 2.5V14m-2.5-2.5L15 14l2.5-2.5" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" /></svg>
+            </button>
+          </div>
+          {/* Créer, Groupe, Note : posés ici par le canevas. */}
+          <div id={TOPBAR_BOARD_SLOT} className="topbar-board" />
         </div>
-        <div className="segmented" role="group" aria-label="Affichage">
-          <button className={showFlows ? 'on' : ''} aria-pressed={showFlows} onClick={() => setShowFlows((v) => !v)} title="Afficher les liens de navigation entre écrans">
-            ⇢ Flux
+        <div className="topbar-zone right">
+          <MemoryBadge />
+          <DisplayMenu display={display} onChange={setDisplay} onReset={resetDisplay} snapshotsAvailable={Boolean(snapStatus?.engine)} />
+          <div className="history" role="group" aria-label="Historique">
+            <button aria-label="Annuler" disabled={!history.undo} onClick={() => travel('undo')} title={history.undo ? `Annuler ${history.undo} (⌘Z)` : 'Rien à annuler'}>
+              <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M9 14L4 9l5-5M4 9h10.5a5.5 5.5 0 010 11H11" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" /></svg>
+            </button>
+            <button aria-label="Rétablir" disabled={!history.redo} onClick={() => travel('redo')} title={history.redo ? `Rétablir ${history.redo} (⇧⌘Z)` : 'Rien à rétablir'}>
+              <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M15 14l5-5-5-5M20 9H9.5a5.5 5.5 0 000 11H13" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" /></svg>
+            </button>
+          </div>
+          <button
+            className="theme-toggle"
+            onClick={() => setThemePref((t) => (t === 'system' ? 'light' : t === 'light' ? 'dark' : 'system'))}
+            title={`Thème de l'éditeur : ${THEME_LABEL[themePref]} (clic : changer)`}
+            aria-label={`Thème : ${THEME_LABEL[themePref]}`}
+          >
+            {THEME_ICON[themePref]}
           </button>
+          <label className="device" title={`${device.label} : ${device.width} × ${device.height}`}>
+            <select value={device.id} onChange={(e) => setDevice(DEVICES.find((d) => d.id === e.target.value)!)} aria-label="Appareil">
+              {(['iPhone', 'Android', 'Pliables', 'Tablettes'] as const).map((group) => (
+                <optgroup key={group} label={group}>
+                  {DEVICES.filter((d) => d.group === group).map((d) => (
+                    <option key={d.id} value={d.id} title={`${d.width} × ${d.height}`}>
+                      {d.label}
+                    </option>
+                  ))}
+                </optgroup>
+              ))}
+            </select>
+          </label>
         </div>
-        <DisplayMenu display={display} onChange={setDisplay} onReset={resetDisplay} />
-        <div className="history" role="group" aria-label="Historique">
-          <button disabled={!history.undo} onClick={() => travel('undo')} title={history.undo ? `Annuler ${history.undo} (⌘Z)` : 'Rien à annuler'}>
-            ↶
-          </button>
-          <button disabled={!history.redo} onClick={() => travel('redo')} title={history.redo ? `Rétablir ${history.redo} (⇧⌘Z)` : 'Rien à rétablir'}>
-            ↷
-          </button>
-        </div>
-        <button
-          className="theme-toggle"
-          onClick={() => setThemePref((t) => (t === 'system' ? 'light' : t === 'light' ? 'dark' : 'system'))}
-          title="Thème de l'éditeur"
-        >
-          {THEME_LABEL[themePref]}
-        </button>
-        <label className="device">
-          <select value={device.id} onChange={(e) => setDevice(DEVICES.find((d) => d.id === e.target.value)!)}>
-            {DEVICES.map((d) => (
-              <option key={d.id} value={d.id}>
-                {d.label} — {d.width}×{d.height}
-              </option>
-            ))}
-          </select>
-        </label>
       </header>
 
-      {display.leftPanel && <Sidebar
+      <Sidebar
+        open={display.leftPanel}
         onOpenComponent={openComponentScreen}
+        onCreate={openCreate}
+        onRevealStory={(id) => {
+          setActiveStory(id);
+          setReveal((r) => ({ id, seq: (r?.seq ?? 0) + 1 }));
+        }}
         onLayerContextMenu={(loc, x, y) => {
           if (!activeStory) return;
           selectLoc(activeStory, loc);
@@ -694,7 +935,7 @@ export function App() {
         selection={selection}
         onEdit={edit}
         onSaveVariant={saveVariant}
-      />}
+      />
 
       {tab.state !== 'owner' ? (
         <main className="canvas">
@@ -716,7 +957,7 @@ export function App() {
         <main className="canvas" />
       ) : (
         <Canvas
-          isolate={paletteVisible ? selection!.story : null}
+          isolate={paletteVisible && !display.rightPanel ? selection!.story : null}
           page={page}
           onChangePage={(update) => boardState.updatePage(page.id, update)}
           onCreateParcours={(name, ids) => {
@@ -733,55 +974,69 @@ export function App() {
           activeStory={activeStory}
           errors={storyErrors}
           blocked={blocked}
-          readyAt={readyAt}
           loaded={loaded}
           generations={generations}
           flows={showFlows ? { links: flows, rects: flowRects } : null}
           reveal={reveal}
           frames={frames.current}
-          onActivate={setActiveStory}
+          onActivate={activate}
           onUnload={resetLoad}
+          snapshots={
+            display.snapshots && snapStatus?.engine
+              ? { items: snapStatus.items, queued: snapStatus.queued, running: snapStatus.running, url: (id, version) => api.snapshotUrl(id, device.width, device.height, version) }
+              : null
+          }
+          onVisible={prioritize}
+          looping={looping}
           empty={stories.length === 0}
           onBackgroundClick={clearSelection}
           keepLoaded={display.loadAll ? 0 : display.keepLoaded}
           loadAll={display.loadAll}
           showBoardTools={display.boardTools}
           showLabels={display.storyLabels}
+          showMinimap={display.minimap}
+          tool={tool}
+          onToolChange={setTool}
+          onCreate={openCreate}
+          place={place}
+          onHideStories={(ids) =>
+            page.stories
+              ? boardState.updatePage(page.id, (p) => ({ ...p, stories: p.stories!.filter((s) => !ids.includes(s)) }))
+              : setHidden((h) => new Set([...h, ...ids]))
+          }
         >
-          {display.pagesBar && <PagesBar
-            board={board}
-            page={page}
-            onSelect={boardState.setPageId}
-            onAdd={(name) => boardState.addPage(name)}
-            onRename={(id, name) => boardState.updatePage(id, (p) => ({ ...p, name }))}
-            onRemove={boardState.removePage}
-          />}
-          {display.libraryBar && <LibraryBar components={project.components} target={insertTargetLabel} onInsert={insertComponent} onOpenComponent={openComponentScreen} appUrl={project.appUrl} isolateStories={project.isolateStories} />}
+          {display.libraryBar && (
+            <LibraryBar
+              components={project.components}
+              target={insertTargetLabel}
+              onInsert={insertComponent}
+              onInsertSnippet={insertSnippet}
+              onShowComponents={() => {
+                if (!displayRef.current.leftPanel) setDisplay('leftPanel', true);
+                window.setTimeout(() => window.dispatchEvent(new CustomEvent(SIDEBAR_TAB_EVENT, { detail: 'components' })), 0);
+              }}
+            />
+          )}
         </Canvas>
       )}
 
-      {display.rightPanel && <Inspector
-        selection={selection}
-        theme={project.theme}
-        root={project.root}
-        onSelectAncestor={(loc) => selection && selectLoc(selection.story, loc)}
-        onEdit={edit}
-        target={styleTarget}
-        onTarget={(t) => selection?.inspect && setTargets((all) => ({ ...all, [selection.inspect!.loc]: t }))}
-      />}
+      {creating && project && (
+        <CreateDialog
+          conventions={creating}
+          components={project.components}
+          activeTitle={activeStory ? (stories.find((s) => s.id === activeStory)?.file.split('/').pop()?.replace(/\.canvas\.\w+$/, '') ?? null) : null}
+          onClose={() => setCreating(null)}
+          onCreated={(result, placement) => {
+            setCreating(null);
+            setToast({ kind: 'ok', text: `${result.name} créé : ${result.files.length} fichier(s)` });
+            setPlace((p) => ({ id: result.story.id, mode: placement, anchor: activeStory, seq: (p?.seq ?? 0) + 1 }));
+            loadProject();
+          }}
+        />
+      )}
+      {display.rightPanel && inspector(false)}
 
-      {paletteVisible && selection?.inspect && selectionRect?.rect && (
-          <SelectionToolbar
-            selection={selection}
-            rect={selectionRect.rect}
-            frame={frames.current.get(selection.story)!}
-            theme={project.theme}
-            target={styleTarget}
-            onEdit={edit}
-            onStyle={(key, value) => writeStyle(key, value)}
-            onMore={() => document.getElementById('inspector-style')?.scrollIntoView({ behavior: 'smooth', block: 'start' })}
-          />
-        )}
+      {paletteVisible && !display.rightPanel && palette(false)}
 
       {menu && selection && (
         <ContextMenu
@@ -806,6 +1061,11 @@ export function App() {
                 disabled: !parsed,
                 run: () => parsed && window.open(`vscode://file/${project.root}/${parsed.file}:${parsed.line}:${parsed.column + 1}`),
               },
+              'separator' as const,
+              { label: 'Premier plan', hint: '⌥⌘]', disabled: !selection.info.stack, run: () => restack('front') },
+              { label: 'Avancer', hint: '⌘]', disabled: !selection.info.stack, run: () => restack('forward') },
+              { label: 'Reculer', hint: '⌘[', disabled: !selection.info.stack, run: () => restack('backward') },
+              { label: 'Arrière-plan', hint: '⌥⌘[', disabled: !selection.info.stack, run: () => restack('back') },
               'separator' as const,
               { label: 'Sélectionner le parent', disabled: ancestors.length < 2, run: () => ancestors[1] && selectLoc(selection.story, ancestors[1].loc, ancestors[1].name) },
               'separator' as const,

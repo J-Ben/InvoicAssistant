@@ -182,6 +182,8 @@ export function componentJsx(name: string, props: ComponentProp[]): string {
     .map((p) => {
       switch (p.type) {
         case 'string':
+          // Une prop de couleur reçoit une couleur, pas son propre nom.
+          if (/colou?r$/i.test(p.name)) return `${p.name}="#7C5CFF"`;
           return `${p.name}="${p.name.charAt(0).toUpperCase()}${p.name.slice(1)}"`;
         case 'number':
           return `${p.name}={0}`;
@@ -202,6 +204,28 @@ export function componentJsx(name: string, props: ComponentProp[]): string {
   // Autre composant à enfants obligatoires : un emplacement vide, valide pour ReactNode.
   if (props.some((p) => p.name === 'children')) return `<${open}>{null}</${name}>`;
   return `<${open} />`;
+}
+
+/** Comme ensureImport, pour un composant exporté par défaut : `import Nom from '…'`. */
+export function ensureDefaultImport(src: SourceFile, name: string, from: string): Patch[] {
+  const program = programOf(src.ast);
+  const imports: AstNode[] = program.body.filter((s: AstNode) => s.type === 'ImportDeclaration');
+  const moduleName = (source: string) => source.replace(/\/index$/, '').split('/').pop();
+  const already = imports.some(
+    (d) => d.importKind !== 'type' && (d.source.value === from || moduleName(d.source.value) === moduleName(from)) && d.specifiers.some((s: AstNode) => s.type === 'ImportDefaultSpecifier' && s.local.name === name),
+  );
+  if (already) return [];
+  if (moduleScope(src.ast).includes(name)) throw new SourceError(`« ${name} » est déjà défini dans ce fichier par autre chose.`);
+  const existing = imports.find((d) => d.importKind !== 'type' && d.source.value === from);
+  // `import { a } from 'x'` : devient `import Nom, { a } from 'x'`.
+  if (existing && !existing.specifiers.some((s: AstNode) => s.type === 'ImportDefaultSpecifier')) {
+    const brace = src.code.indexOf('{', existing.start);
+    if (existing.specifiers[0] && brace !== -1 && brace < existing.specifiers[0].start) return [{ start: brace, end: brace, text: `${name}, ` }];
+  }
+  const line = `import ${name} from ${quoteJs(from, src.quote)};`;
+  const anchor = imports[imports.length - 1];
+  if (anchor) return [{ start: anchor.end, end: anchor.end, text: `\n${line}` }];
+  return [{ start: program.start, end: program.start, text: `${line}\n` }];
 }
 
 /** Ajoute l'import d'un composant s'il n'est pas déjà en portée. `from` = spécificateur de module. */

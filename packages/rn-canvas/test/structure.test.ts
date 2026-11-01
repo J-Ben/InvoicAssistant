@@ -114,6 +114,8 @@ test('bibliothèque : composants exportés et props obligatoires', () => {
   assert.deepEqual(badge, {
     name: 'Badge',
     file: 'src/components/Card.tsx',
+    // Badge ne transmet pas de prop `style` : l'éditeur le signale avant de styliser une instance.
+    acceptsStyle: false,
     group: 'components',
     props: [
       { name: 'label', type: 'string' },

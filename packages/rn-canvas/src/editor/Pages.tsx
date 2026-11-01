@@ -80,69 +80,103 @@ interface Props {
   onRemove: (id: string) => void;
 }
 
-/** Onglets des pages, en haut à gauche du canevas. */
+/**
+ * Onglets des pages, dans la barre du haut. Quand ils débordent, des flèches passent au parcours
+ * précédent ou suivant (et le font défiler jusqu'à lui).
+ */
 export function PagesBar({ board, page, onSelect, onAdd, onRename, onRemove }: Props) {
   const [renaming, setRenaming] = useState<string | null>(null);
   const [adding, setAdding] = useState(false);
+  const nav = useRef<HTMLElement>(null);
+  const [overflow, setOverflow] = useState(false);
+  useEffect(() => {
+    const el = nav.current;
+    if (!el) return;
+    const measure = () => setOverflow(el.scrollWidth > el.clientWidth + 1);
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [board.pages.length, adding, renaming]);
+  useEffect(() => {
+    nav.current?.querySelector('.page-tab.on')?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+  }, [page.id, overflow]);
+  const index = board.pages.findIndex((p) => p.id === page.id);
+  const go = (step: number) => {
+    const next = board.pages[index + step];
+    if (next) onSelect(next.id);
+  };
   return (
-    <nav className="pages-bar" aria-label="Pages" onPointerDown={(e) => e.stopPropagation()}>
-      {board.pages.map((p) =>
-        renaming === p.id ? (
-          <input
-            key={p.id}
-            autoFocus
-            className="page-input"
-            defaultValue={p.name}
-            onFocus={(e) => e.target.select()}
-            onBlur={(e) => {
-              if (e.target.value.trim()) onRename(p.id, e.target.value.trim());
-              setRenaming(null);
-            }}
-            onKeyDown={(e) => (e.key === 'Enter' || e.key === 'Escape') && (e.target as HTMLInputElement).blur()}
-          />
-        ) : (
-          <button
-            key={p.id}
-            className={`page-tab ${p.id === page.id ? 'on' : ''}`}
-            onClick={() => onSelect(p.id)}
-            onDoubleClick={() => p.id !== OVERVIEW_PAGE && setRenaming(p.id)}
-            title={p.id === OVERVIEW_PAGE ? 'Tous les écrans' : `Parcours · ${p.stories?.length ?? 0} écran(s) · double-clic pour renommer`}
-          >
-            {p.id === OVERVIEW_PAGE ? '▦ ' : '⇢ '}
-            {p.name}
-            {p.id !== OVERVIEW_PAGE && p.id === page.id && (
-              <span
-                className="page-remove"
-                role="button"
-                aria-label={`Supprimer le parcours ${p.name}`}
-                title="Supprimer ce parcours (les écrans ne sont pas supprimés)"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  if (window.confirm(`Supprimer le parcours « ${p.name} » ? Les écrans restent dans la vue d'ensemble.`)) onRemove(p.id);
-                }}
-              >
-                ×
-              </span>
-            )}
-          </button>
-        ),
-      )}
-      {adding ? (
-        <input
-          autoFocus
-          className="page-input"
-          placeholder="Nom du parcours"
-          onBlur={(e) => {
-            if (e.target.value.trim()) onAdd(e.target.value.trim());
-            setAdding(false);
-          }}
-          onKeyDown={(e) => (e.key === 'Enter' || e.key === 'Escape') && (e.key === 'Escape' && ((e.target as HTMLInputElement).value = ''), (e.target as HTMLInputElement).blur())}
-        />
-      ) : (
-        <button className="page-tab add" onClick={() => setAdding(true)} title="Nouveau parcours : une page avec une sélection d'écrans, rangée à part">
-          ＋ Parcours
+    <div className="pages-strip">
+      {overflow && (
+        <button className="pages-arrow" onClick={() => go(-1)} disabled={index <= 0} aria-label="Parcours précédent" title="Parcours précédent">
+          ‹
         </button>
       )}
-    </nav>
+      <nav className="pages-bar" ref={nav} aria-label="Pages" onPointerDown={(e) => e.stopPropagation()}>
+        {board.pages.map((p) =>
+          renaming === p.id ? (
+            <input
+              key={p.id}
+              autoFocus
+              className="page-input"
+              defaultValue={p.name}
+              onFocus={(e) => e.target.select()}
+              onBlur={(e) => {
+                if (e.target.value.trim()) onRename(p.id, e.target.value.trim());
+                setRenaming(null);
+              }}
+              onKeyDown={(e) => (e.key === 'Enter' || e.key === 'Escape') && (e.target as HTMLInputElement).blur()}
+            />
+          ) : (
+            <button
+              key={p.id}
+              className={`page-tab ${p.id === page.id ? 'on' : ''}`}
+              onClick={() => onSelect(p.id)}
+              onDoubleClick={() => p.id !== OVERVIEW_PAGE && setRenaming(p.id)}
+              title={p.id === OVERVIEW_PAGE ? 'Tous les écrans' : `Parcours · ${p.stories?.length ?? 0} écran(s) · double-clic pour renommer`}
+            >
+              {p.id === OVERVIEW_PAGE ? '▦ ' : '⇢ '}
+              {p.name}
+              {p.id !== OVERVIEW_PAGE && p.id === page.id && (
+                <span
+                  className="page-remove"
+                  role="button"
+                  aria-label={`Supprimer le parcours ${p.name}`}
+                  title="Supprimer ce parcours (les écrans ne sont pas supprimés)"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    if (window.confirm(`Supprimer le parcours « ${p.name} » ? Les écrans restent dans la vue d'ensemble.`)) onRemove(p.id);
+                  }}
+                >
+                  ×
+                </span>
+              )}
+            </button>
+          ),
+        )}
+        {adding ? (
+          <input
+            autoFocus
+            className="page-input"
+            placeholder="Nom du parcours"
+            onBlur={(e) => {
+              if (e.target.value.trim()) onAdd(e.target.value.trim());
+              setAdding(false);
+            }}
+            onKeyDown={(e) => (e.key === 'Enter' || e.key === 'Escape') && (e.key === 'Escape' && ((e.target as HTMLInputElement).value = ''), (e.target as HTMLInputElement).blur())}
+          />
+        ) : (
+          <button className="page-tab add" onClick={() => setAdding(true)} title="Nouveau parcours : une page avec une sélection d'écrans, rangée à part">
+            ＋ Parcours
+          </button>
+        )}
+      </nav>
+      {overflow && (
+        <button className="pages-arrow" onClick={() => go(1)} disabled={index >= board.pages.length - 1} aria-label="Parcours suivant" title="Parcours suivant">
+          ›
+        </button>
+      )}
+    </div>
   );
 }

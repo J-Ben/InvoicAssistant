@@ -8,13 +8,28 @@ import fs from 'node:fs';
 import http from 'node:http';
 import path from 'node:path';
 import type { EditRequest } from '../shared/protocol.ts';
+import type { CreateRequest } from './create.ts';
+import { createBranch, gitInfo, switchBranch } from './git.ts';
+import { memoryStats } from './stats.ts';
+import { iconFont, iconGlyphs, imageFile, importImage, projectFonts, projectImages } from './snippets.ts';
 import { SourceError } from './inspect.ts';
 import type { Project } from './project.ts';
+import type { DeviceSize, SnapshotEngine } from './snapshots.ts';
 
 export interface ServerOptions {
   port: number;
   host?: string;
   editorDir: string;
+  /** Moteur de captures (créé après le serveur, qui lui sert à prévenir l'éditeur). */
+  snapshots?: { current: SnapshotEngine | null };
+}
+
+/** Taille d'appareil passée par l'éditeur (`w`, `h`), bornée. */
+function deviceOf(source: { w?: unknown; h?: unknown }): DeviceSize {
+  const width = Math.round(Number(source.w));
+  const height = Math.round(Number(source.h));
+  if (!(width >= 200 && width <= 2000 && height >= 200 && height <= 3000)) throw new SourceError('Taille d’appareil invalide.');
+  return { width, height };
 }
 
 export interface CanvasServer {
@@ -66,6 +81,59 @@ export function startServer(project: Project, options: ServerOptions): Promise<C
         const body = (await readJson(req)) as { file: string; name: string };
         return send(res, 200, project.createComponentStory(body.file, body.name));
       }
+      // Création de composants et d'écrans : conventions du projet, aperçu des fichiers, création.
+      if (url.pathname === '/api/create' && req.method === 'GET') return send(res, 200, project.createInfo());
+      if ((url.pathname === '/api/create' || url.pathname === '/api/create/preview') && req.method === 'POST') {
+        if (!req.headers['content-type']?.startsWith('application/json')) throw new SourceError('Content-Type JSON attendu.', 415);
+        const body = (await readJson(req)) as CreateRequest;
+        const plan = url.pathname === '/api/create' ? project.create(body) : project.planCreate(body);
+        return send(res, 200, { name: plan.name, main: plan.main, files: plan.files.map((f) => f.path), story: plan.story, importFrom: plan.importFrom });
+      }
+      // Briques de l'éditeur : images du projet (et import), icônes, polices chargées.
+      if (url.pathname === '/api/assets' && req.method === 'GET') return send(res, 200, projectImages(project.root));
+      if (url.pathname === '/api/assets' && req.method === 'POST') {
+        const name = url.searchParams.get('name') ?? '';
+        return send(res, 200, { path: importImage(project.root, name, await readBody(req, 10 * 1024 * 1024)) });
+      }
+      if (url.pathname === '/api/asset' && req.method === 'GET') {
+        const file = imageFile(project.root, url.searchParams.get('path') ?? '');
+        if (!file) return send(res, 404, { error: 'Image introuvable.' });
+        res.writeHead(200, { 'Content-Type': `image/${path.extname(file).slice(1).replace('jpg', 'jpeg')}`, 'Cache-Control': 'no-cache' });
+        return void fs.createReadStream(file).pipe(res);
+      }
+      if (url.pathname === '/api/icons' && req.method === 'GET') {
+        const glyphs = iconGlyphs(project.root);
+        if (!glyphs) return send(res, 200, { installed: false, icons: [] });
+        const words = (url.searchParams.get('q') ?? '').toLowerCase().split(/\s+/).filter(Boolean);
+        const icons = Object.entries(glyphs)
+          .filter(([n]) => words.every((w) => n.includes(w)))
+          .slice(0, 180)
+          .map(([name, code]) => ({ name, code }));
+        return send(res, 200, { installed: true, icons });
+      }
+      if (url.pathname === '/api/icons/font' && req.method === 'GET') {
+        const font = iconFont(project.root);
+        if (!font) return send(res, 404, { error: 'Police d’icônes introuvable.' });
+        res.writeHead(200, { 'Content-Type': 'font/ttf', 'Cache-Control': 'max-age=86400' });
+        return void fs.createReadStream(font).pipe(res);
+      }
+      if (url.pathname === '/api/memory' && req.method === 'GET') return send(res, 200, await memoryStats());
+      if (url.pathname === '/api/git' && req.method === 'GET') return send(res, 200, await gitInfo(project.root));
+      if (url.pathname === '/api/git/switch' && req.method === 'POST') {
+        if (!req.headers['content-type']?.startsWith('application/json')) throw new SourceError('Content-Type JSON attendu.', 415);
+        const body = (await readJson(req)) as { branch?: unknown };
+        return send(res, 200, await switchBranch(project.root, String(body.branch ?? '')));
+      }
+      if (url.pathname === '/api/git/branch' && req.method === 'POST') {
+        if (!req.headers['content-type']?.startsWith('application/json')) throw new SourceError('Content-Type JSON attendu.', 415);
+        const body = (await readJson(req)) as { name?: unknown; base?: unknown };
+        return send(res, 200, await createBranch(project.root, String(body.name ?? '').trim(), body.base ? String(body.base) : undefined));
+      }
+      if (url.pathname === '/api/fonts' && req.method === 'GET') {
+        // Les polices se chargent d'habitude dans l'entrée (App.tsx) ou le layout racine : dossiers du projet et entrées.
+        const entries = ['App.tsx', 'App.jsx', 'App.js', 'index.ts', 'index.js'].filter((f) => fs.existsSync(path.join(project.root, f)));
+        return send(res, 200, projectFonts(project.root, [...entries, ...project.sourceFiles((n) => /\.(tsx?|jsx?)$/.test(n))]));
+      }
       if (url.pathname === '/api/board' && req.method === 'GET') return send(res, 200, project.board());
       if (url.pathname === '/api/board' && req.method === 'PUT') {
         if (!req.headers['content-type']?.startsWith('application/json')) throw new SourceError('Content-Type JSON attendu.', 415);
@@ -81,6 +149,31 @@ export function startServer(project: Project, options: ServerOptions): Promise<C
       if (url.pathname === '/api/history' && req.method === 'GET') return send(res, 200, project.history());
       if (url.pathname === '/api/undo' && req.method === 'POST') return send(res, 200, project.undo());
       if (url.pathname === '/api/redo' && req.method === 'POST') return send(res, 200, project.redo());
+
+      const snapshots = options.snapshots?.current ?? null;
+      if (url.pathname.startsWith('/api/snapshot') && !snapshots) return send(res, 200, { engine: false, reason: 'Captures désactivées (--no-snapshots).' });
+      if (url.pathname === '/api/snapshots' && req.method === 'GET' && snapshots) {
+        return send(res, 200, snapshots.status(deviceOf({ w: url.searchParams.get('w'), h: url.searchParams.get('h') })));
+      }
+      if (url.pathname === '/api/snapshots/priority' && req.method === 'POST' && snapshots) {
+        if (!req.headers['content-type']?.startsWith('application/json')) throw new SourceError('Content-Type JSON attendu.', 415);
+        const body = (await readJson(req)) as { w: number; h: number; ids?: unknown };
+        snapshots.prioritize(deviceOf(body), Array.isArray(body.ids) ? body.ids.map(String) : []);
+        return send(res, 200, { ok: true });
+      }
+      if (url.pathname === '/api/snapshots/refresh' && req.method === 'POST' && snapshots) {
+        if (!req.headers['content-type']?.startsWith('application/json')) throw new SourceError('Content-Type JSON attendu.', 415);
+        const body = (await readJson(req)) as { w: number; h: number; ids?: unknown };
+        snapshots.refresh(deviceOf(body), Array.isArray(body.ids) ? body.ids.map(String) : undefined);
+        return send(res, 200, { ok: true });
+      }
+      if (url.pathname === '/api/snapshot' && req.method === 'GET' && snapshots) {
+        const image = snapshots.image(url.searchParams.get('id') ?? '', deviceOf({ w: url.searchParams.get('w'), h: url.searchParams.get('h') }));
+        if (!image) return send(res, 404, { error: 'Pas encore de capture.' });
+        // L'URL porte la version de l'image (`v`) : une nouvelle capture a une autre URL.
+        res.writeHead(200, { 'Content-Type': 'image/webp', 'Cache-Control': url.searchParams.get('v') ? 'private, max-age=31536000, immutable' : 'no-store' });
+        return void res.end(image);
+      }
 
       if (url.pathname === '/api/events' && req.method === 'GET') {
         res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', Connection: 'keep-alive' });
@@ -121,6 +214,25 @@ export function startServer(project: Project, options: ServerOptions): Promise<C
 function send(res: http.ServerResponse, status: number, body: unknown): void {
   res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
   res.end(JSON.stringify(body));
+}
+
+/** Corps brut (import d'image), borné à `max` octets. */
+function readBody(req: http.IncomingMessage, max: number): Promise<Buffer> {
+  return new Promise((resolve, reject) => {
+    let size = 0;
+    const chunks: Buffer[] = [];
+    req.on('data', (chunk: Buffer) => {
+      size += chunk.length;
+      if (size > max) {
+        reject(new SourceError('Fichier trop volumineux.', 413));
+        req.destroy();
+        return;
+      }
+      chunks.push(chunk);
+    });
+    req.on('end', () => resolve(Buffer.concat(chunks)));
+    req.on('error', reject);
+  });
 }
 
 function readJson(req: http.IncomingMessage): Promise<unknown> {

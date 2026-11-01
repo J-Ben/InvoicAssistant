@@ -158,7 +158,7 @@ textarea { resize: vertical; }
 .frame-loading .spinner { width: 28px; height: 28px; border-width: 3px; }
 .spinner { display: inline-block; width: 14px; height: 14px; border: 2px solid var(--border); border-top-color: var(--accent); border-radius: 50%; animation: rnc-spin 0.8s linear infinite; flex: none; }
 @keyframes rnc-spin { to { transform: rotate(360deg); } }
-.canvas-progress { position: absolute; top: 58px; z-index: 6; white-space: nowrap; left: 50%; transform: translateX(-50%); display: flex; align-items: center; gap: 8px; padding: 6px 12px; border-radius: 999px; background: var(--panel); border: 1px solid var(--border); color: var(--muted); font-size: 12px; box-shadow: 0 4px 12px rgb(0 0 0 / 0.12); pointer-events: none; }
+.canvas-progress { position: absolute; top: 12px; left: 50%; transform: translateX(-50%); display: flex; align-items: center; gap: 8px; padding: 6px 12px; border-radius: 999px; background: var(--panel); border: 1px solid var(--border); color: var(--muted); font-size: 12px; box-shadow: 0 4px 12px rgb(0 0 0 / 0.12); pointer-events: none; }
 .frame-empty { position: absolute; left: 12px; right: 12px; bottom: 12px; padding: 10px; border-radius: 8px; background: var(--panel); border: 1px solid var(--border); color: var(--muted); font-size: 12px; }
 .frame-error { position: absolute; left: 12px; right: 12px; bottom: 12px; padding: 10px; border-radius: 8px; background: var(--error-soft); color: var(--error); font-size: 12px; }
 .canvas-empty { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; color: var(--muted); cursor: default; }
@@ -419,8 +419,224 @@ textarea { resize: vertical; }
 .display-keep { align-items: center; justify-content: space-between; cursor: default; }
 .display-keep select { background: var(--input); border: 1px solid var(--border); border-radius: 6px; padding: 2px 4px; }
 
-/* Temps et progression du chargement des écrans. */
-.load-time { color: var(--muted); font-weight: 400; }
-.frame-progress { display: block; width: 60%; height: 4px; border-radius: 2px; background: var(--border); overflow: hidden; }
-.frame-progress > span { display: block; height: 100%; background: var(--accent); transition: width 0.25s linear; }
-.canvas-progress.done { color: var(--muted); }
+/* Écrans en images (moteur de captures) : l'image dessous, l'écran en direct par-dessus une fois affiché. */
+.frame iframe { position: relative; z-index: 1; }
+.frame iframe.frame-live-pending { visibility: hidden; }
+.frame-snapshot { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; object-position: top; cursor: pointer; user-select: none; }
+.frame-snapshot-pending { border: 0; font: inherit; font-size: 13px; cursor: pointer; text-align: center; padding: 24px; }
+.frame-snapshot-error { z-index: 2; cursor: pointer; }
+.frame-badge { position: absolute; top: 8px; right: 8px; z-index: 3; padding: 2px 8px; border-radius: 999px; background: var(--panel); border: 1px solid var(--border); color: var(--muted); font-size: 11px; pointer-events: none; }
+.frame-badge.is-live { color: var(--ok); border-color: currentColor; }
+
+.canvas-progress { top: auto; bottom: 64px; }
+
+/* Minicarte (en bas à droite) et rappel quand la vue ne montre aucun écran. */
+.minimap { position: absolute; right: 12px; bottom: 12px; z-index: 5; padding: 4px; border-radius: 8px; background: var(--panel); border: 1px solid var(--border); box-shadow: 0 4px 12px rgb(0 0 0 / 0.12); cursor: default; }
+.minimap svg { display: block; cursor: pointer; }
+.minimap-story { fill: var(--muted); opacity: 0.55; }
+.minimap-story.live { fill: var(--ok); opacity: 0.9; }
+.minimap-story.active { fill: var(--accent); opacity: 1; }
+.minimap-group { fill: var(--accent-soft); stroke: var(--border); opacity: 0.6; }
+.minimap-view { fill: color-mix(in srgb, var(--accent) 12%, transparent); stroke: var(--accent); stroke-width: 1.5; }
+.canvas-empty-view { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); z-index: 5; padding: 10px 16px; border-radius: 999px; border: 1px solid var(--border); background: var(--panel); color: var(--text); font: inherit; font-size: 13px; cursor: pointer; box-shadow: 0 4px 12px rgb(0 0 0 / 0.12); }
+.canvas-empty-view:hover { border-color: var(--accent); }
+
+/* Sélection multiple : écrans marqués, lasso, barre d'actions (sur la ligne de la recherche, au centre). */
+.artboard.selected .frame { outline: 3px dashed var(--accent); outline-offset: 4px; }
+.artboard.selected .artboard-label { color: var(--accent); }
+.canvas-lasso { position: absolute; z-index: 6; border: 1px solid var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent); pointer-events: none; }
+.selection-bar { position: absolute; top: 56px; left: 50%; transform: translateX(-50%); z-index: 6; display: flex; align-items: center; gap: 2px; padding: 3px 3px 3px 12px; border-radius: 10px; background: var(--panel); border: 1px solid var(--accent); box-shadow: 0 4px 16px rgb(0 0 0 / 0.18); font-size: 13px; white-space: nowrap; cursor: default; }
+.selection-bar span { margin-right: 8px; color: var(--text); font-weight: 600; }
+.selection-bar button { border: 0; background: none; padding: 6px 10px; border-radius: 6px; color: var(--text); font: inherit; cursor: pointer; }
+.selection-bar button:hover { background: var(--input); }
+.selection-bar .selection-clear { color: var(--muted); }
+
+/* Recherche du panneau de gauche, au-dessus des onglets ; les onglets portent le nombre de résultats. */
+.sidebar-search { padding: 10px 10px 4px; }
+.sidebar-search input { width: 100%; box-sizing: border-box; padding: 7px 10px; border-radius: 8px; border: 1px solid var(--border); background: var(--input); color: var(--text); font: inherit; font-size: 13px; outline: none; }
+.sidebar-search input:focus { border-color: var(--accent); background: var(--panel); }
+.tabs .tab-count { margin-left: 5px; padding: 0 6px; border-radius: 999px; background: var(--accent-soft); color: var(--accent); font-size: 11px; font-weight: 600; }
+.tabs button.empty { opacity: 0.45; }
+.tabs button.empty .tab-count { background: var(--input); color: var(--muted); }
+
+/* Outils du canevas (Sélection, Main), en haut au centre. */
+.canvas-tools { position: absolute; top: 12px; left: 50%; transform: translateX(-50%); z-index: 5; display: flex; gap: 2px; padding: 3px; border-radius: 10px; background: var(--panel); border: 1px solid var(--border); box-shadow: 0 4px 12px rgb(0 0 0 / 0.1); cursor: default; }
+.canvas-tools button { display: grid; place-items: center; width: 34px; height: 30px; border: 0; border-radius: 7px; background: none; color: var(--text); cursor: pointer; }
+.canvas-tools button:hover { background: var(--input); }
+.canvas-tools button.on { background: var(--accent); color: #fff; }
+.canvas.tool-select { cursor: default; }
+.canvas.tool-select .frame-snapshot { cursor: pointer; }
+.canvas.tool-hand, .canvas.tool-hand .world * { cursor: grab !important; }
+.canvas.tool-hand.panning, .canvas.tool-hand.panning .world * { cursor: grabbing !important; }
+.canvas.tool-hand iframe { pointer-events: none; }
+
+/* Barre des composants (bas) : icônes et libellés plus grands, plus faciles à viser. */
+.library-bar { padding: 4px; gap: 2px; }
+.library-tool { padding: 6px 10px; font-size: 13px; gap: 6px; }
+.library-tool.quick { padding: 5px; }
+.library-icon { width: 30px; height: 30px; border-radius: 7px; font-size: 15px; }
+.library-separator { height: 24px; margin: 0 6px; }
+/* Onglets : le nombre de résultats passe sous le libellé, pour tenir dans la largeur du panneau. */
+.tabs button { display: flex; flex-direction: column; align-items: center; gap: 3px; min-width: 0; padding: 9px 2px; font-size: 12px; white-space: nowrap; }
+.tabs .tab-count { margin-left: 0; line-height: 16px; }
+/* Progression des captures : sur une ligne, la liste des écrans en cours coupée si elle déborde. */
+.canvas-progress { white-space: nowrap; max-width: min(560px, calc(100% - 260px)); overflow: hidden; text-overflow: ellipsis; }
+.canvas-progress .muted { overflow: hidden; text-overflow: ellipsis; }
+
+/* Fenêtre « Créer » (composant ou écran). */
+.dialog-backdrop { position: fixed; inset: 0; z-index: 50; display: grid; place-items: center; background: rgb(0 0 0 / 0.35); }
+.dialog { width: min(560px, calc(100vw - 32px)); max-height: calc(100vh - 48px); overflow-y: auto; box-sizing: border-box; padding: 18px 20px; border-radius: 12px; background: var(--panel); color: var(--text); border: 1px solid var(--border); box-shadow: 0 24px 64px rgb(0 0 0 / 0.3); display: flex; flex-direction: column; gap: 12px; }
+.dialog header { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.dialog h2 { margin: 0; font-size: 17px; }
+.dialog footer { display: flex; justify-content: flex-end; align-items: center; gap: 12px; }
+.dialog footer .primary-button { margin-top: 0; }
+.dialog footer .primary-button:disabled { opacity: 0.5; cursor: default; }
+.segmented { display: flex; padding: 2px; border-radius: 8px; background: var(--input); }
+.segmented button { border: 0; background: none; padding: 5px 12px; border-radius: 6px; color: var(--muted); font: inherit; font-size: 13px; cursor: pointer; }
+.segmented button.on { background: var(--panel); color: var(--text); font-weight: 600; box-shadow: 0 1px 3px rgb(0 0 0 / 0.12); }
+.segmented button:disabled { opacity: 0.4; cursor: not-allowed; }
+.field { display: flex; flex-direction: column; gap: 4px; min-width: 0; border: 0; padding: 0; margin: 0; font-size: 13px; }
+.field > span, .field legend { color: var(--muted); font-size: 12px; padding: 0; }
+.field input, .field select, .create-prop input, .create-prop select { box-sizing: border-box; width: 100%; padding: 7px 9px; border-radius: 7px; border: 1px solid var(--border); background: var(--input); color: var(--text); font: inherit; font-size: 13px; }
+.field input:focus, .field select:focus { outline: none; border-color: var(--accent); }
+.field-row { display: flex; gap: 10px; }
+.field-row .field { flex: 1; }
+.field-check { display: flex; gap: 8px; align-items: flex-start; font-size: 13px; }
+.create-props { gap: 6px; }
+.create-prop { display: grid; grid-template-columns: 1.4fr 1.2fr 1fr auto auto; gap: 6px; align-items: center; }
+.create-prop input[type='color'] { padding: 2px; height: 32px; }
+.create-optional { display: flex; gap: 4px; align-items: center; font-size: 12px; color: var(--muted); white-space: nowrap; }
+.create-preview { padding: 10px 12px; border-radius: 8px; background: var(--input); font-size: 12px; }
+.create-preview ul { margin: 4px 0; padding-left: 16px; }
+.create-preview p { margin: 0; }
+.create-error { color: var(--error); }
+.sidebar-search { display: flex; gap: 6px; align-items: center; }
+.sidebar-create { flex: none; width: 32px; height: 32px; border-radius: 8px; border: 1px solid var(--border); background: var(--accent); color: #fff; font-size: 16px; cursor: pointer; }
+
+/* Briques de la barre du bas (forme, image, icône, interrupteur, mises en page) et leurs menus. */
+@font-face { font-family: 'rnc-ionicons'; src: url('/api/icons/font') format('truetype'); font-display: block; }
+.bricks { position: relative; display: flex; align-items: center; gap: 2px; padding-left: 4px; margin-left: 4px; border-left: 1px solid var(--border); }
+.bricks-popover { width: 360px; gap: 6px; overflow-y: auto; }
+.bricks-popover.wide-icons { width: 420px; }
+.brick-icon { display: inline-block; width: 28px; text-align: center; color: var(--accent); }
+.image-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; overflow-y: auto; }
+.image-cell { display: flex; flex-direction: column; gap: 4px; padding: 4px; border: 1px solid var(--border); border-radius: 8px; background: var(--input); color: var(--muted); font-size: 11px; cursor: pointer; overflow: hidden; }
+.image-cell img { width: 100%; aspect-ratio: 4 / 3; object-fit: cover; border-radius: 5px; background: var(--panel); }
+.image-cell span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.image-cell:hover, .icon-cell:hover { border-color: var(--accent); }
+.icon-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(44px, 1fr)); gap: 4px; overflow-y: auto; max-height: 300px; }
+.icon-cell { display: grid; place-items: center; height: 44px; border: 1px solid transparent; border-radius: 8px; background: var(--input); color: var(--text); cursor: pointer; }
+.ionicon { font-family: 'rnc-ionicons'; font-size: 22px; line-height: 1; }
+
+/* Inspecteur : élément de taille nulle, avec de quoi le corriger. */
+.notice.zero-size { margin: 8px 0; }
+.zero-size-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.zero-size-actions button { padding: 4px 10px; border-radius: 6px; border: 1px solid var(--border); background: var(--panel); color: var(--text); font: inherit; font-size: 12px; cursor: pointer; }
+.zero-size-actions button:hover { border-color: var(--accent); }
+/* Libellé d'un outil rapide : en bulle au-dessus, pour ne pas décaler les boutons voisins sous la souris. */
+.library-tool.quick { position: relative; }
+.library-tool.quick .library-label, .library-tool.quick:hover .library-label { display: none; }
+.library-tool.quick:hover .library-label { display: block; position: absolute; bottom: calc(100% + 8px); left: 50%; transform: translateX(-50%); padding: 3px 8px; border-radius: 6px; background: var(--text); color: var(--panel); font-size: 12px; white-space: nowrap; pointer-events: none; z-index: 10; }
+
+/* Palette contextuelle : raccourcis de taille, ombre, sélecteurs d'icône et d'image. */
+.sel-shortcuts { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; padding: 2px 0 6px; }
+.sel-shortcuts .sel-btn { justify-content: flex-start; font-size: 12px; white-space: nowrap; }
+.sel-select { flex: 1; min-width: 0; padding: 4px 6px; border-radius: 6px; border: 1px solid var(--border); background: var(--input); color: var(--text); font: inherit; font-size: 12px; }
+.sel-popover.sel-picker { width: 320px; padding: 0; right: 0; left: auto; }
+.sel-picker .bricks-popover { position: static; transform: none; width: auto; max-height: 340px; box-shadow: none; border: 0; }
+.sel-corners .sel-btn { min-width: 26px; padding: 2px 4px; }
+/* Choix des coins : sur deux lignes si la palette est étroite (préréglages, puis les quatre coins). */
+.sel-corners { flex-wrap: wrap; justify-content: flex-end; gap: 3px; }
+
+/* Barre du haut du canevas : onglets de pages, outils, création, zoom sur une seule ligne (retour à la
+   ligne plutôt que chevauchement quand les panneaux latéraux réduisent la place). */
+.canvas-top { position: absolute; top: 8px; left: 8px; right: 8px; z-index: 6; display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 8px; pointer-events: none; }
+.canvas-top > * { pointer-events: auto; position: static !important; transform: none !important; flex: none; margin: 0; }
+.canvas-top > .pages-bar { flex: 0 1 auto; min-width: 0; max-width: 100%; }
+.canvas-top > .canvas-top-spacer { flex: 1 1 0; min-width: 0; pointer-events: none; }
+.zoom-controls button.on { background: var(--accent); color: #fff; }
+/* Minicarte au-dessus de la barre du bas, jamais dessous. */
+.minimap { bottom: 64px; }
+.selection-bar { top: 60px; }
+/* Palette intégrée en haut du panneau de droite. */
+.sel-palette.docked { position: static; width: auto; border: 0; border-bottom: 1px solid var(--border); border-radius: 0; box-shadow: none; animation: none; }
+
+/* Onglets des parcours dans la barre du haut, avec flèches quand ils débordent. */
+.topbar .brand { flex: none; }
+.pages-strip { flex: 1 1 auto; min-width: 0; display: flex; align-items: center; gap: 2px; }
+.topbar .pages-bar { position: static; flex: 0 1 auto; min-width: 0; max-width: none; padding: 2px; border: 0; box-shadow: none; background: none; scrollbar-width: none; }
+.topbar .pages-bar::-webkit-scrollbar { display: none; }
+.pages-arrow { flex: none; width: 24px; height: 26px; border: 0; border-radius: 6px; background: var(--input); color: var(--text); font-size: 16px; line-height: 1; cursor: pointer; }
+.pages-arrow:disabled { opacity: 0.35; cursor: default; }
+/* Outils Sélection, Main, Interaction : icônes. */
+.segmented.tools button { display: grid; place-items: center; width: 34px; height: 26px; padding: 0; }
+.segmented.tools button.on { background: var(--accent); color: #fff; }
+.history button { display: grid; place-items: center; color: var(--text); }
+
+/* Palette dépliée : tous les réglages de l'inspecteur, sans ouvrir le panneau de droite. */
+.sel-palette.expanded { max-height: calc(100vh - 120px); overflow-y: auto; }
+.sel-all { margin: 6px -10px 0; border-top: 1px solid var(--border); }
+.sel-all .inspector-embedded .panel-body { padding: 8px 10px; }
+.sel-open-panel { margin-left: auto; display: grid; place-items: center; width: 26px; height: 24px; padding: 0; border: 0; border-radius: 6px; background: none; color: var(--muted); cursor: pointer; }
+.sel-open-panel:hover { background: var(--input); color: var(--text); }
+
+/* Barre du haut en trois zones : gauche (projet, parcours), centre (outils, Créer), droite (affichage). */
+.topbar-zone { display: flex; align-items: center; gap: 12px; min-width: 0; }
+.topbar-zone.left, .topbar-zone.right { flex: 1 1 0; }
+.topbar-zone.right { justify-content: flex-end; }
+.topbar-zone.center { flex: none; gap: 8px; }
+.topbar-board .board-tools { position: static; box-shadow: none; }
+.board-tools button.create { background: var(--accent); color: #fff; font-weight: 600; }
+.board-tools button.create:hover { background: color-mix(in srgb, var(--accent) 85%, #000); }
+
+/* Branche git du projet. */
+.branch-menu { position: relative; }
+.branch-button { display: inline-flex; align-items: center; gap: 6px; max-width: 220px; padding: 4px 9px; border: 1px solid var(--border); border-radius: 6px; background: var(--input); color: var(--text); cursor: pointer; font: inherit; font-size: 12px; }
+.branch-button.on, .branch-button:hover { border-color: var(--accent); }
+.branch-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.branch-dirty { flex: none; width: 7px; height: 7px; border-radius: 50%; background: #f5a524; }
+.branch-popover { position: absolute; top: calc(100% + 6px); right: 0; z-index: 30; width: 300px; max-height: 420px; display: flex; flex-direction: column; gap: 6px; padding: 8px; border-radius: 10px; background: var(--panel); border: 1px solid var(--border); box-shadow: 0 12px 32px rgb(0 0 0 / 0.2); }
+.branch-popover .search { margin: 0; }
+.branch-list { overflow-y: auto; }
+.branch-group { padding: 6px 6px 2px; color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; }
+.branch-item { display: block; width: 100%; padding: 5px 8px; border: 0; border-radius: 6px; background: none; color: var(--text); text-align: left; font: inherit; font-size: 12px; cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.branch-item:hover:not(:disabled) { background: var(--input); }
+.branch-item:disabled { opacity: 0.5; cursor: default; }
+.branch-item.current { color: var(--accent); font-weight: 600; opacity: 1; }
+
+/* Mémoire utilisée, discrète. */
+.memory-badge { flex: none; color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; cursor: default; white-space: nowrap; }
+.memory-badge.high { color: #f5a524; }
+.branch-new { padding: 6px 8px; border: 1px dashed var(--border); border-radius: 6px; background: none; color: var(--accent); text-align: left; font: inherit; font-size: 12px; cursor: pointer; }
+.branch-new:hover { border-color: var(--accent); }
+.branch-form { display: flex; flex-direction: column; gap: 6px; padding: 8px; border: 1px solid var(--border); border-radius: 8px; }
+.branch-form-row { display: flex; align-items: center; gap: 6px; }
+.branch-form-row input, .branch-form-row select { flex: 1; min-width: 0; padding: 4px 6px; border: 1px solid var(--border); border-radius: 6px; background: var(--input); color: var(--text); font: inherit; font-size: 12px; }
+.branch-form-row select[aria-label="Type de branche"] { flex: none; width: 90px; }
+.branch-preview { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: 11px; }
+.create-branch { display: flex; align-items: center; gap: 8px; flex: 1; min-width: 0; }
+.create-branch-check { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; font-size: 12px; }
+.create-branch input:not([type='checkbox']) { flex: 1; min-width: 0; }
+.field .create-branch input[type='checkbox'] { width: auto; padding: 0; margin: 0; }
+/* Flux dans le groupe d'outils : bascule, pas un outil (couleur d'accent légère quand active). */
+.segmented.tools .tools-separator { width: 1px; margin: 4px 3px; background: var(--border); }
+.segmented.tools button.toggle.on { background: var(--accent-soft); color: var(--accent); box-shadow: none; }
+.notice.styleless { display: flex; flex-direction: column; gap: 6px; font-size: 12px; }
+.instance-switch { align-self: stretch; margin: 4px 0; }
+.instance-switch button { flex: 1; font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.instance-switch button.on { color: var(--accent); }
+
+/* Barre du haut compacte : icônes, libellés en info-bulle. */
+.branch-button { max-width: 150px; }
+.display-hidden { display: inline-grid; place-items: center; min-width: 15px; height: 15px; margin-left: 4px; padding: 0 3px; border-radius: 8px; background: var(--accent-soft); color: var(--accent); font-size: 10px; font-weight: 600; }
+.topbar .theme-toggle { min-width: 30px; }
+.topbar-board .board-tools button:not(.create) { min-width: 30px; }
+
+/* Palette : position libre et plans. */
+.sel-stack { display: flex; align-items: center; gap: 2px; }
+.sel-stack .sel-btn { min-width: 26px; padding: 3px 0; justify-content: center; }
+.sel-stack .muted { margin-left: 4px; font-variant-numeric: tabular-nums; }
+.sel-free-hint { align-self: center; }
+.layer-z { flex: none; margin-left: 4px; padding: 0 4px; border-radius: 4px; background: var(--accent-soft); color: var(--accent); font-size: 10px; font-variant-numeric: tabular-nums; }
+/* Appareil : le menu fermé prend la largeur du nom choisi, pas celle du plus long de la liste. */
+.topbar .device select { field-sizing: content; max-width: 150px; text-overflow: ellipsis; }

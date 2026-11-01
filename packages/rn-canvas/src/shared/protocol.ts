@@ -46,6 +46,8 @@ export interface LayerNode {
   loc: Loc;
   name: string;
   children: LayerNode[];
+  /** `zIndex` rendu, s'il n'est pas l'ordre par défaut (pastille dans les calques). */
+  z?: number;
 }
 
 export interface SelectionInfo {
@@ -55,6 +57,10 @@ export interface SelectionInfo {
   ancestors: { loc: Loc; name: string }[];
   rect: Rect | null;
   computed: Record<string, string>;
+  /** Position dans le parent (bord de la boîte, marges exclues), pour passer en position libre sans saut. */
+  offset?: { left: number; top: number };
+  /** Plans : `zIndex` de l'élément et extrêmes parmi ses frères (0 quand rien n'est écrit). */
+  stack?: { z: number; min: number; max: number; siblings: number };
 }
 
 /** Messages runtime → éditeur. */
@@ -63,6 +69,8 @@ export type RuntimeMessage =
   | { source: 'rn-canvas'; type: 'tree'; story: string; tree: LayerNode[] }
   | { source: 'rn-canvas'; type: 'select'; story: string; selection: SelectionInfo }
   | { source: 'rn-canvas'; type: 'error'; story: string; message: string }
+  /** Boucle de rendu (« Maximum update depth exceeded » répété) : l'éditeur démonte l'écran. */
+  | { source: 'rn-canvas'; type: 'loop'; story: string; count: number }
   /** Navigation demandée par l'écran (ignorée : l'écran reste affiché seul). */
   | { source: 'rn-canvas'; type: 'navigate'; story: string; action: string; href: string | null }
   /** Appel réseau coupé dans le canevas (`network: 'offline'`, par défaut) : `count` depuis le chargement. */
@@ -76,7 +84,7 @@ export type RuntimeMessage =
   /** ⌘/Ctrl + molette au-dessus de l'écran (zoom du canevas) ; x, y dans l'écran. */
   | { source: 'rn-canvas'; type: 'wheel'; story: string; deltaX: number; deltaY: number; x: number; y: number; metaKey: boolean; ctrlKey: boolean }
   /** Raccourci clavier tapé pendant que le focus est dans l'écran (relayé à l'éditeur). */
-  | { source: 'rn-canvas'; type: 'key'; story: string; key: string; metaKey: boolean; ctrlKey: boolean; shiftKey: boolean; altKey: boolean }
+  | { source: 'rn-canvas'; type: 'key'; story: string; key: string; code?: string; metaKey: boolean; ctrlKey: boolean; shiftKey: boolean; altKey: boolean }
   /** Cadre des aperçus de la bibliothèque prêt à recevoir sa liste (`gallery`). */
   | { source: 'rn-canvas'; type: 'gallery-ready'; story: string }
   /** Clic sur un aperçu : composant à insérer (`fichier#Nom`). */
@@ -84,7 +92,7 @@ export type RuntimeMessage =
   /** « Ouvrir en grand » sur la vignette d'une modale : écran dédié dans le canevas. */
   | { source: 'rn-canvas'; type: 'open'; story: string; key: string }
   /** Poignée relâchée sur l'élément sélectionné : style à écrire (`value` en px, ou null pour retirer). */
-  | { source: 'rn-canvas'; type: 'style-drag'; story: string; loc: Loc; key: string; value: number }
+  | { source: 'rn-canvas'; type: 'style-drag'; story: string; loc: Loc; key: string; value: number; more?: { key: string; value: number }[] }
   /** Texte modifié sur place (double-clic sur un texte sélectionné). */
   | { source: 'rn-canvas'; type: 'text-edit'; story: string; loc: Loc; value: string }
   /** Position de l'élément sélectionné dans l'écran, à chaque changement (barre d'outils de l'éditeur). */
@@ -135,6 +143,8 @@ export interface HandleSet {
   height: boolean;
   /** Texte modifiable sur place (double-clic). */
   text: boolean;
+  /** Texte : les coins changent la taille de police (au lieu de la boîte). */
+  fontSize?: boolean;
 }
 
 /** Lien de navigation lu dans le code (mode Flux). */
@@ -252,12 +262,57 @@ export type EditRequest =
   | { op: 'setText'; loc: Loc; name: string; value: string }
   | { op: 'setProp'; loc: Loc; name: string; prop: string; value: EditValue }
   | { op: 'setToken'; path: string; value: EditValue }
+  /** Ajoute une prop `style` au composant (type, paramètre, style de l'élément racine). */
+  | { op: 'addStyleProp'; file: string; name: string }
   | { op: 'remove'; loc: Loc; name: string }
   | { op: 'duplicate'; loc: Loc; name: string }
   | { op: 'move'; loc: Loc; name: string; target: Loc; targetName: string; position: InsertPosition }
   | { op: 'insert'; loc: Loc; name: string; position: InsertPosition; component: { name: string; file: string | null } }
+  /** Brique de l'éditeur (forme, image, icône, interrupteur, mise en page), avec ses imports. */
+  | { op: 'insertSnippet'; loc: Loc; name: string; position: InsertPosition; snippet: SnippetRequest }
   /** Ajoute une variante à un fichier canvas, à partir d'une variante existante et d'un stockage capturé. */
   | { op: 'addStory'; file: string; base: string; exportName: string; storage: Record<string, string> };
+
+/** Mémoire en Mo : ce serveur, l'app (Expo, Metro), le navigateur des captures ; null si inconnue. */
+export interface MemoryStats {
+  total: number;
+  server: number;
+  app: number | null;
+  captures: number | null;
+}
+
+/** Branche git du projet (barre du haut de l'éditeur). */
+export interface GitInfo {
+  /** null : HEAD détaché (pas sur une branche). */
+  branch: string | null;
+  branches: string[];
+  /** Fichiers suivis modifiés : il faut les commiter avant de changer de branche. */
+  changes: string[];
+}
+
+export type SnippetKind = 'box' | 'image' | 'icon' | 'switch' | 'row' | 'column' | 'grid' | 'chips' | 'card' | 'gradient';
+
+/** Balise racine de chaque brique (pour resélectionner l'élément créé). */
+export const SNIPPET_ROOT: Record<SnippetKind, string> = {
+  box: 'View',
+  image: 'Image',
+  icon: 'Ionicons',
+  switch: 'Switch',
+  row: 'View',
+  column: 'View',
+  grid: 'View',
+  chips: 'ScrollView',
+  card: 'View',
+  gradient: 'LinearGradient',
+};
+
+export interface SnippetRequest {
+  kind: SnippetKind;
+  /** Image : chemin du fichier dans le projet (`assets/photo.png`). */
+  asset?: string;
+  /** Icône : nom Ionicons (`home-outline`). */
+  icon?: string;
+}
 
 /** Où placer un élément par rapport à la cible : frère avant/après, ou dernier enfant. */
 export type InsertPosition = 'before' | 'after' | 'inside';
@@ -269,6 +324,14 @@ export interface ComponentEntry {
   group: string;
   /** Props obligatoires, remplies avec des valeurs d'exemple à l'insertion. */
   props: { name: string; type: 'string' | 'number' | 'boolean' | 'function' | 'array' | 'unknown' }[];
+  /** `export default` (sinon export nommé). */
+  exportDefault?: boolean;
+  /** Le type des props déclare `style` ; false : non (un style posé sur une instance serait sans effet) ; null : inconnu. */
+  acceptsStyle?: boolean | null;
+  /** Module à importer s'il diffère du fichier : le dossier du composant quand il a un index. */
+  module?: string;
+  /** Niveau Atomic Design (`atoms`…), s'il est rangé dans le dossier des composants. */
+  level?: string;
 }
 
 export interface HistoryState {
@@ -296,6 +359,33 @@ export interface ThemeInfo {
   /** Nom sous lequel les composants accèdent au thème, s'il diffère de l'export (ex. `colors`). */
   alias: string | null;
   tokens: ThemeToken[];
+}
+
+// ---- Captures des écrans (moteur headless du serveur) ----
+
+/**
+ * `ok` : capture à jour ; `stale` : le code a changé, l'ancienne image reste affichée en attendant ;
+ * `pending` : jamais capturé ; `error` : l'écran a planté ; `loop` : boucle de rendu détectée.
+ */
+export type SnapshotState = 'ok' | 'stale' | 'pending' | 'error' | 'loop';
+
+export interface SnapshotInfo {
+  state: SnapshotState;
+  /** Version de l'image (empreinte du code de l'écran) ; null tant qu'aucune n'existe. */
+  version: string | null;
+  message?: string;
+}
+
+export interface SnapshotStatus {
+  /** Moteur disponible ; sinon `reason` explique pourquoi (navigateur introuvable, Node trop ancien…). */
+  engine: boolean;
+  reason?: string;
+  device: string;
+  items: Record<string, SnapshotInfo>;
+  /** Écrans en file d'attente ou en cours. */
+  queued: number;
+  /** Capture en cours (identifiants d'écrans). */
+  running: string[];
 }
 
 export interface ProjectInfo {
@@ -390,4 +480,92 @@ export function normalizeBoard(input: unknown): Board {
   if (overview) overview.stories = null;
   else pages.unshift(emptyBoard().pages[0]);
   return { version: 1, pages: [pages.find((p) => p.id === OVERVIEW_PAGE)!, ...pages.filter((p) => p.id !== OVERVIEW_PAGE)] };
+}
+
+// ---- Création de composants et d'écrans (fenêtre « Créer » de l'éditeur) ----
+
+export type CreatePropKind = 'string' | 'number' | 'boolean' | 'color' | 'function' | 'node';
+
+export interface CreatePropSpec {
+  name: string;
+  type: CreatePropKind;
+  optional: boolean;
+  /** Valeur par défaut, telle que saisie (texte, nombre, true/false, couleur). */
+  default?: string;
+}
+
+export interface CreateRequest {
+  kind: 'component' | 'screen';
+  /** Nom saisi librement (`bouton principal`) : normalisé en `BoutonPrincipal`. */
+  name: string;
+  /** Composant : niveau Atomic Design (`atoms`…) et sous-dossier de rangement facultatif. */
+  level?: string;
+  group?: string;
+  /** Écran : dossier où le créer. */
+  dir?: string;
+  /** Copie d'un composant existant, au lieu d'un composant vide. */
+  from?: { file: string; name: string } | null;
+  props?: CreatePropSpec[];
+  /** Enveloppe react-zero-skeleton (si le projet l'a). */
+  skeleton?: boolean;
+}
+
+/** Réponse de l'aperçu et de la création. */
+export interface CreateResult {
+  name: string;
+  main: string;
+  files: string[];
+  story: { file: string; id: string };
+  importFrom: string;
+}
+
+export interface ConventionLevel {
+  name: string;
+  /** Dossier du niveau, relatif à la racine du projet. */
+  dir: string;
+  /** Alias d'import du tsconfig (`@atoms`), s'il y en a un. */
+  alias: string | null;
+  /** Sous-dossiers de rangement (`molecules/Cards`) : ils contiennent des composants, n'en sont pas un. */
+  groups: string[];
+}
+
+export interface ConventionLayout {
+  /** Un dossier par composant (`Button/Button.tsx`). */
+  folder: boolean;
+  /** Props dans `Nom.props.ts`. */
+  propsFile: boolean;
+  /** Styles dans `Nom.styles.ts`. */
+  stylesFile: boolean;
+  /** `index.ts` qui réexporte le composant. */
+  index: boolean;
+  /** `export default Nom` (sinon `export const Nom`). */
+  exportDefault: boolean;
+}
+
+export interface Conventions {
+  /** Dossier qui contient les niveaux Atomic Design ; null s'il n'y en a pas. */
+  componentsRoot: string | null;
+  levels: ConventionLevel[];
+  layout: ConventionLayout;
+  styles: 'stylesheet' | 'styled-components';
+  /** Dossiers d'écrans proposés (le premier est présélectionné). */
+  screenDirs: string[];
+  /** Intégration react-zero-skeleton, si le paquet est installé. */
+  skeleton: boolean;
+  code: {
+    quote: "'" | '"';
+    bracketSpacing: boolean;
+    semicolons: boolean;
+    /** Indentation : deux espaces, quatre, ou une tabulation. */
+    indent: string;
+    /** Interface des props exportée (sinon locale au fichier). */
+    exportProps: boolean;
+  };
+  /** Ce qui vient de la détection et ce qui vient de rn-canvas.json (pour `doctor`). */
+  source: Record<string, 'détecté' | 'configuré' | 'par défaut'>;
+}
+
+/** Ce qu'il faut à la fenêtre « Créer » : les conventions, et les écrans qu'on peut copier. */
+export interface CreateInfo extends Conventions {
+  screens: { name: string; file: string }[];
 }

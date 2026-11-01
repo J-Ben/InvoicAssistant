@@ -1,13 +1,22 @@
 import { useMemo, useState } from 'react';
-import type { EditRequest, InspectResult, SourceValue, StyleSource, StyleTarget, ThemeInfo, ValueOrigin } from '../shared/protocol.ts';
+import type { EditRequest, EditValue, InspectResult, SourceValue, StyleSource, StyleTarget, ThemeInfo, ValueOrigin } from '../shared/protocol.ts';
 import type { Selection } from './App.tsx';
 import { GradientSection } from './Gradient.tsx';
-import { type Choice, ColorInput, CommitInput, NumberField, SegmentedField, SelectField, TokenPicker } from './fields.tsx';
+import { type Choice, ColorInput, CommitInput, NumberField, SegmentedField, SelectField, type InstanceScope, InstanceSwitch, type Styleless, StylelessNotice, TokenPicker } from './fields.tsx';
 import { displayValue, isColorKey, isToken, parseInput, toHex } from './values.ts';
 import { mergedStyle, styleEntries, targetSourceOf, tokensFor } from './styleModel.ts';
+import { SHADOWS, SHADOW_KEYS, shadowEntries, shadowPreset } from './presets.ts';
 
 interface Props {
   selection: Selection | null;
+  /** Palette contextuelle intégrée en haut du panneau (au lieu de flotter sur le canevas). */
+  palette?: React.ReactNode;
+  /** Rendu dans la palette flottante : sans le cadre du panneau. */
+  embedded?: boolean;
+  styleless?: Styleless | null;
+  instanceScope?: InstanceScope | null;
+  /** Taille de la sélection suivie à chaque rendu (une icône s'agrandit quand sa police arrive). */
+  liveRect?: { width: number; height: number } | null;
   theme: ThemeInfo | null;
   root: string;
   onSelectAncestor: (loc: string) => void;
@@ -15,15 +24,17 @@ interface Props {
   /** Source des styles modifiée (partagée avec la barre flottante). */
   target: StyleTarget;
   onTarget: (target: StyleTarget) => void;
+  /** Polices chargées par le projet (choix de fontFamily). */
+  fonts?: string[];
 }
 
 const GROUPS: { title: string; keys: string[] }[] = [
-  { title: 'Disposition', keys: ['flex', 'flexDirection', 'flexWrap', 'alignItems', 'justifyContent', 'alignSelf', 'gap', 'width', 'height'] },
+  { title: 'Disposition', keys: ['flex', 'flexGrow', 'flexDirection', 'flexWrap', 'alignItems', 'justifyContent', 'alignSelf', 'gap', 'width', 'height'] },
   { title: 'Espacement', keys: ['padding', 'paddingHorizontal', 'paddingVertical', 'margin', 'marginHorizontal', 'marginVertical'] },
   { title: 'Apparence', keys: ['backgroundColor', 'borderRadius', 'borderWidth', 'borderColor', 'opacity'] },
-  { title: 'Texte', keys: ['color', 'fontSize', 'fontWeight', 'lineHeight', 'textAlign'] },
+  { title: 'Texte', keys: ['color', 'fontFamily', 'fontSize', 'fontWeight', 'lineHeight', 'textAlign'] },
 ];
-const GROUPED = new Set(GROUPS.flatMap((g) => g.keys));
+const GROUPED = new Set([...GROUPS.flatMap((g) => g.keys), ...SHADOW_KEYS]);
 
 const choices = (values: string[], labels: Record<string, string> = {}, shorts: Record<string, string> = {}): Choice[] =>
   values.map((v) => ({ value: v, label: labels[v] ?? v, short: shorts[v] }));
@@ -68,7 +79,11 @@ function targetKey(t: StyleTarget) {
   return t.kind === 'instance' ? 'instance' : t.ref;
 }
 
-export function Inspector({ selection, theme, root, onSelectAncestor, onEdit, target, onTarget }: Props) {
+/** Panneau de droite, ou simple bloc dans la palette flottante. */
+const Wrapper = ({ embedded, children }: { embedded: boolean; children: React.ReactNode }) =>
+  embedded ? <div className="inspector-embedded">{children}</div> : <aside className="sidebar right">{children}</aside>;
+
+export function Inspector({ selection, palette, embedded = false, styleless = null, instanceScope = null, liveRect, theme, root, onSelectAncestor, onEdit, target, onTarget, fonts = [] }: Props) {
   if (!selection) {
     return (
       <aside className="sidebar right">
@@ -91,12 +106,12 @@ export function Inspector({ selection, theme, root, onSelectAncestor, onEdit, ta
 
   const { info, inspect, error } = selection;
   const ancestors = [...info.ancestors].reverse();
-  const screenFile = ancestors[0]?.loc.split(':')[0];
   const file = info.loc.split(':')[0];
   const [, line, column] = /:(\d+):(\d+)$/.exec(info.loc) ?? [];
 
   return (
-    <aside className="sidebar right">
+    <Wrapper embedded={embedded}>
+      {!embedded && palette}
       <div className="panel-body">
         <div className="crumbs">
           {ancestors.map((a, i) => (
@@ -119,12 +134,7 @@ export function Inspector({ selection, theme, root, onSelectAncestor, onEdit, ta
           {file}:{line}
         </a>
 
-        {screenFile && file !== screenFile && (
-          <p className="notice">
-            Élément défini dans <b>{file.split('/').pop()}</b> : le modifier ici change <b>toutes les instances</b> de ce composant.
-            Pour ne changer que cet endroit, sélectionnez l'instance dans le fil d'Ariane.
-          </p>
-        )}
+        {instanceScope && <InstanceSwitch value={instanceScope} />}
 
         {error && <p className="notice error">{error}</p>}
         {!inspect && !error && <p className="hint">Analyse du code…</p>}
@@ -133,22 +143,29 @@ export function Inspector({ selection, theme, root, onSelectAncestor, onEdit, ta
             key={inspect.loc}
             inspect={inspect}
             computed={info.computed}
+            rect={liveRect ?? info.rect}
+            fonts={fonts}
             theme={theme}
             onEdit={onEdit}
             target={target}
             setTarget={onTarget}
             parent={info.ancestors[1] ?? null}
             onSelectParent={() => info.ancestors[1] && onSelectAncestor(info.ancestors[1].loc)}
+            styleless={styleless}
           />
         )}
       </div>
-    </aside>
+    </Wrapper>
   );
 }
 
 interface DetailsProps {
   inspect: InspectResult;
+  styleless: Styleless | null;
   computed: Record<string, string>;
+  /** Taille affichée de l'élément (null : inconnue). */
+  rect: { width: number; height: number } | null;
+  fonts: string[];
   theme: ThemeInfo | null;
   onEdit: Props['onEdit'];
   target: StyleTarget;
@@ -180,7 +197,7 @@ function Origins({ origins, parent, onSelectParent }: { origins?: ValueOrigin[];
   );
 }
 
-function Details({ inspect, computed, theme, onEdit, target, setTarget, parent, onSelectParent }: DetailsProps) {
+function Details({ inspect, computed, rect, fonts, theme, onEdit, target, setTarget, parent, onSelectParent, styleless }: DetailsProps) {
   const { loc, name } = inspect;
   const sources = inspect.style.sources;
   const [newKey, setNewKey] = useState('');
@@ -201,6 +218,14 @@ function Details({ inspect, computed, theme, onEdit, target, setTarget, parent, 
   const removeStyle = (key: string) => onEdit({ op: 'setStyle', loc, name, key, value: { kind: 'remove' }, target });
 
   const extraKeys = [...merged.keys()].filter((k) => !GROUPED.has(k));
+
+  // Élément sans surface : sa taille ne dépasse pas l'épaisseur de ses bordures (une View vide, ou
+  // flex: 1 dans un parent sans hauteur). Taille affichée, sinon taille effective calculée.
+  const px = (v: string | undefined) => (v && /^-?[\d.]+px$/.test(v) ? parseFloat(v) : 0);
+  const size = rect ?? (computed.height && computed.width ? { width: px(computed.width), height: px(computed.height) } : null);
+  const bordersY = px(computed.borderTopWidth) + px(computed.borderBottomWidth);
+  const bordersX = px(computed.borderLeftWidth) + px(computed.borderRightWidth);
+  const flat = size && (size.height <= bordersY + 1 || size.width <= bordersX + 1) ? { height: size.height <= bordersY + 1, width: size.width <= bordersX + 1, borders: bordersX + bordersY > 0 } : null;
   const isComponent = /^[A-Z]/.test(name) && !BUILTINS.test(name);
 
   const row = (key: string) => {
@@ -224,6 +249,10 @@ function Details({ inspect, computed, theme, onEdit, target, setTarget, parent, 
           <TokenPicker tokens={colorTokens} value={text} onPick={(path) => setStyle(key, path)} />
         </>
       );
+    } else if (key === 'fontFamily' && !token) {
+      // Polices chargées par le projet, plus les familles génériques ; vide = police du système.
+      const families = [...new Set([...fonts, ...(text ? [text.replace(/^['"]|['"]$/g, '')] : []), 'serif', 'monospace'])];
+      field = <SelectField value={text} choices={families.map((f) => ({ value: f, label: f }))} placeholder={placeholder || 'Système'} onCommit={commitChoice} />;
     } else if (SEGMENTED[key] && !token) {
       field = <SegmentedField value={text} choices={SEGMENTED[key]} effective={effective} onCommit={commitChoice} />;
     } else if (SELECTS[key] && !token) {
@@ -312,6 +341,7 @@ function Details({ inspect, computed, theme, onEdit, target, setTarget, parent, 
 
       <section className="section" id="inspector-style">
         <h3>Style</h3>
+        {styleless && <StylelessNotice styleless={styleless} />}
         {!inspect.style.editable ? (
           <p className="code">{inspect.style.code}</p>
         ) : (
@@ -351,12 +381,44 @@ function Details({ inspect, computed, theme, onEdit, target, setTarget, parent, 
                 <p className="hint small">Ces styles ne sont pas écrits ici : modifiez leur source, ou surchargez-les avec « Cet élément uniquement ».</p>
               </div>
             )}
+            {flat && (
+              <div className="notice zero-size">
+                <b>Cet élément ne se voit pas</b> : il mesure {Math.round(size!.width)} × {Math.round(size!.height)} px{flat.borders ? ', bordures comprises' : ''}.
+                Une View vide n'a pas de taille, et <code>flex: 1</code> ne fait que partager la place que lui laisse son parent.
+                <div className="zero-size-actions">
+                  {flat.height && <button onClick={() => setStyle('height', '120')}>Hauteur 120</button>}
+                  {flat.width && <button onClick={() => setStyle('width', "'100%'")}>Largeur 100 %</button>}
+                  {parent && <button onClick={onSelectParent}>Voir le parent</button>}
+                </div>
+              </div>
+            )}
             {GROUPS.map((g) => (
               <div key={g.title} className="style-group">
                 <h4>{g.title}</h4>
                 {g.keys.map(row)}
               </div>
             ))}
+            <div className="style-group">
+              <h4>Ombre</h4>
+              <div className="prop-row">
+                <label>ombre</label>
+                <div className="prop-input">
+                  <select
+                    value={shadowPreset((key) => displayValue(merged.get(key)?.value), (key) => merged.has(key))}
+                    onChange={(e) => onEdit({ op: 'setStyles', loc, name, entries: shadowEntries(inspect, target, e.target.value), target })}
+                  >
+                    {SHADOWS.map((sh) => (
+                      <option key={sh.value} value={sh.value}>
+                        {sh.label}
+                      </option>
+                    ))}
+                    <option value="custom" disabled>
+                      Personnalisée
+                    </option>
+                  </select>
+                </div>
+              </div>
+            </div>
             {extraKeys.length > 0 && (
               <div className="style-group">
                 <h4>Autres</h4>

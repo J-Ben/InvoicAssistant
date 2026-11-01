@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type { ComponentEntry, EditRequest, InsertPosition, LayerNode, ProjectInfo } from '../shared/protocol.ts';
 import type { Selection } from './App.tsx';
 import { ColorInput, CommitInput } from './fields.tsx';
@@ -6,6 +6,8 @@ import { GalleryFrame, ViewToggle, useLibraryView } from './GalleryFrame.tsx';
 import { displayValue, toHex } from './values.ts';
 
 interface Props {
+  /** Panneau affiché ; fermé, il reste monté pour suivre la sélection (calque prêt à la réouverture). */
+  open: boolean;
   project: ProjectInfo;
   hidden: Set<string>;
   /** Nom du parcours affiché ; null : vue d'ensemble (les cases affichent / masquent les écrans). */
@@ -28,7 +30,32 @@ interface Props {
   onLayerContextMenu: (loc: string, x: number, y: number) => void;
   /** Capture le stockage de l'écran et l'enregistre comme nouvelle variante. */
   onSaveVariant: (storyId: string, exportName: string) => void;
+  /** Sélectionne l'écran et cadre la vue dessus (résultat de recherche, clic dans la liste). */
+  onRevealStory: (id: string) => void;
+  /** Ouvre la fenêtre « Créer » (composant ou écran). */
+  onCreate: () => void;
 }
+
+/** Recherche commune aux onglets : mots sans accents ni casse, dans n'importe quel ordre. */
+export const SEARCH_INPUT_ID = 'rn-canvas-search';
+const fold = (text: string) => text.normalize('NFD').replace(/\p{Diacritic}/gu, '').toLowerCase();
+const wordsOf = (query: string) => fold(query.trim()).split(/\s+/).filter(Boolean);
+const matches = (words: string[], ...texts: (string | null | undefined)[]) => {
+  const text = fold(texts.filter(Boolean).join(' '));
+  return words.every((w) => text.includes(w));
+};
+
+/** Calques qui correspondent, avec leurs parents (pour garder le chemin jusqu'à eux). */
+function filterTree(nodes: LayerNode[], words: string[]): LayerNode[] {
+  const out: LayerNode[] = [];
+  for (const node of nodes) {
+    const children = filterTree(node.children, words);
+    if (children.length || matches(words, node.name, fileOf(node.loc).split('/').pop())) out.push({ ...node, children });
+  }
+  return out;
+}
+
+const countTree = (nodes: LayerNode[], words: string[]): number => nodes.reduce((n, node) => n + (matches(words, node.name, fileOf(node.loc).split('/').pop()) ? 1 : 0) + countTree(node.children, words), 0);
 
 type Tab = 'screens' | 'layers' | 'components' | 'theme';
 
@@ -61,27 +88,110 @@ export function endComponentDrag() {
 export const CONTAINERS = new Set(['View', 'ScrollView', 'SafeAreaView', 'KeyboardAvoidingView', 'Pressable', 'TouchableOpacity', 'TouchableHighlight']);
 const fileOf = (loc: string) => loc.split(':')[0];
 
+const TABS: [Tab, string][] = [
+  ['screens', 'Écrans'],
+  ['layers', 'Calques'],
+  ['components', 'Composants'],
+  ['theme', 'Thème'],
+];
+
+/** Ouvre un onglet du panneau de gauche depuis ailleurs (barre du bas). */
+export const SIDEBAR_TAB_EVENT = 'rn-canvas:sidebar-tab';
+
+/**
+ * Panneau de gauche : la recherche porte sur les quatre onglets à la fois ; chaque onglet affiche son
+ * nombre de résultats, et l'onglet ouvert ne montre que les siens.
+ */
 export function Sidebar(props: Props) {
   const [tab, setTab] = useState<Tab>('screens');
+  useEffect(() => {
+    const show = (e: Event) => setTab((e as CustomEvent<Tab>).detail);
+    window.addEventListener(SIDEBAR_TAB_EVENT, show);
+    return () => window.removeEventListener(SIDEBAR_TAB_EVENT, show);
+  }, []);
+  // Un élément sélectionné sur un écran : l'onglet Calques se place sur son calque, panneau ouvert ou non.
+  useEffect(() => {
+    if (props.selectedLoc) setTab('layers');
+  }, [props.selectedLoc]);
+  // À la réouverture, le calque sélectionné est déjà visible.
+  useEffect(() => {
+    if (props.open) requestAnimationFrame(() => document.querySelector('.sidebar.left .layer.selected')?.scrollIntoView({ block: 'nearest' }));
+  }, [props.open]);
+  const [query, setQuery] = useState('');
+  const input = useRef<HTMLInputElement>(null);
+  const words = useMemo(() => wordsOf(query), [query]);
+  const counts = useMemo<Record<Tab, number> | null>(() => {
+    if (!words.length) return null;
+    const stories = props.project.stories.flatMap((g) => g.stories);
+    return {
+      screens: stories.filter((s) => matches(words, s.file.split('/').pop()!.replace(/\.canvas\.\w+$/, ''), s.title, s.exportName)).length,
+      layers: countTree(props.tree, words),
+      components: props.project.components.filter((c) => matches(words, c.name, c.group)).length,
+      theme: (props.project.theme?.tokens ?? []).filter((t) => matches(words, t.path, displayValue(t.value))).length,
+    };
+  }, [words, props.project, props.tree]);
+  const elsewhere = counts && counts[tab] === 0 ? TABS.filter(([key]) => key !== tab && counts[key] > 0) : [];
+
   return (
-    <aside className="sidebar left">
+    <aside className="sidebar left" hidden={!props.open}>
+      <div className="sidebar-search">
+        <input
+          ref={input}
+          id={SEARCH_INPUT_ID}
+          type="search"
+          value={query}
+          placeholder="Rechercher   ⌘K"
+          aria-label="Rechercher dans les écrans, calques, composants et le thème"
+          onChange={(e) => setQuery(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Escape') {
+              setQuery('');
+              input.current?.blur();
+            } else if (e.key === 'Enter' && tab === 'screens') {
+              // Entrée : le premier écran trouvé.
+              const first = props.project.stories.flatMap((g) => g.stories).find((s) => matches(words, s.file.split('/').pop()!.replace(/\.canvas\.\w+$/, ''), s.title, s.exportName) && !props.hidden.has(s.id));
+              if (first) props.onRevealStory(first.id);
+            }
+          }}
+        />
+        <button className="sidebar-create" onClick={props.onCreate} title="Créer un composant ou un écran">
+          ＋
+        </button>
+      </div>
       <nav className="tabs">
-        <button className={tab === 'screens' ? 'on' : ''} onClick={() => setTab('screens')}>Écrans</button>
-        <button className={tab === 'layers' ? 'on' : ''} onClick={() => setTab('layers')}>Calques</button>
-        <button className={tab === 'components' ? 'on' : ''} onClick={() => setTab('components')}>Composants</button>
-        <button className={tab === 'theme' ? 'on' : ''} onClick={() => setTab('theme')}>Thème</button>
+        {TABS.map(([key, label]) => (
+          <button key={key} className={`${tab === key ? 'on' : ''} ${counts && counts[key] === 0 ? 'empty' : ''}`} onClick={() => setTab(key)}>
+            {label}
+            {counts && <span className="tab-count">{counts[key]}</span>}
+          </button>
+        ))}
       </nav>
       <div className="panel-body">
-        {tab === 'screens' && <Screens {...props} />}
-        {tab === 'layers' && <Layers {...props} />}
-        {tab === 'components' && <Components {...props} />}
-        {tab === 'theme' && <Theme {...props} />}
+        {elsewhere.length > 0 && (
+          <p className="notice small">
+            Rien ici pour « {query.trim()} » ·{' '}
+            {elsewhere.map(([key, label], i) => (
+              <span key={key}>
+                {i > 0 && ', '}
+                <button className="link-button" onClick={() => setTab(key)}>
+                  {counts![key]} dans {label}
+                </button>
+              </span>
+            ))}
+          </p>
+        )}
+        {tab === 'screens' && <Screens {...props} words={words} />}
+        {tab === 'layers' && <Layers {...props} words={words} />}
+        {tab === 'components' && <Components {...props} words={words} />}
+        {tab === 'theme' && <Theme {...props} words={words} />}
       </div>
     </aside>
   );
 }
 
-function Screens({ project, hidden, parcours, missingRoutes, onGenerateRoutes, onToggleStory, activeStory, onActivateStory, onSaveVariant }: Props) {
+type TabProps = Props & { words: string[] };
+
+function Screens({ project, hidden, parcours, missingRoutes, onGenerateRoutes, onToggleStory, activeStory, onRevealStory, onSaveVariant, words }: TabProps) {
   const [saving, setSaving] = useState<string | null>(null);
   const [name, setName] = useState('');
   const routes = missingRoutes.length > 0 && parcours === null && (
@@ -115,13 +225,16 @@ function Screens({ project, hidden, parcours, missingRoutes, onGenerateRoutes, o
         </p>
       )}
       <p className="hint small">Une variante peut garder l'état d'un écran : remplissez-le en mode Interaction, puis « ＋ État ».</p>
-      {project.stories.map((group) => (
+      {project.stories.map((group) => {
+        const stories = words.length ? group.stories.filter((s) => matches(words, s.file.split('/').pop()!.replace(/\.canvas\.\w+$/, ''), s.title, s.exportName, group.title)) : group.stories;
+        if (!stories.length) return null;
+        return (
         <div key={group.file} className="group">
           <div className="group-title" title={group.file}>{group.title}</div>
-          {group.stories.map((story) => (
+          {stories.map((story) => (
             <div key={story.id} className={`row ${activeStory === story.id ? 'selected' : ''}`}>
               <input type="checkbox" checked={!hidden.has(story.id)} onChange={() => onToggleStory(story.id)} aria-label={parcours !== null ? `Inclure ${story.title} dans le parcours` : `Afficher ${story.title}`} />
-              <button className="row-label" onClick={() => onActivateStory(story.id)}>{story.title}</button>
+              <button className="row-label" onClick={() => onRevealStory(story.id)} title={hidden.has(story.id) ? 'Écran masqué sur cette page : cochez-le pour le voir sur le canevas' : 'Afficher cet écran sur le canevas'}>{story.title}</button>
               <button
                 className="icon small-action"
                 title="Enregistrer l'état actuel de cet écran comme nouvelle variante"
@@ -149,14 +262,16 @@ function Screens({ project, hidden, parcours, missingRoutes, onGenerateRoutes, o
             </form>
           )}
         </div>
-      ))}
+        );
+      })}
     </>
   );
 }
 
-function Layers({ tree, activeStory, selectedLoc, onSelectLayer, onHoverLayer, onLayerContextMenu, onEdit }: Props) {
+function Layers({ tree: fullTree, activeStory, selectedLoc, onSelectLayer, onHoverLayer, onLayerContextMenu, onEdit, words }: TabProps) {
   if (!activeStory) return <p className="hint">Cliquez sur un écran pour voir ses calques.</p>;
-  if (tree.length === 0) return <p className="hint">Chargement des calques…</p>;
+  if (fullTree.length === 0) return <p className="hint">Chargement des calques…</p>;
+  const tree = words.length ? filterTree(fullTree, words) : fullTree;
 
   const drop = (target: LayerNode, position: InsertPosition) => {
     const item = dragging;
@@ -184,7 +299,7 @@ function Layers({ tree, activeStory, selectedLoc, onSelectLayer, onHoverLayer, o
         }}
       >
         {tree.map((node) => (
-          <Layer key={node.key} node={node} depth={0} selectedLoc={selectedLoc} onSelect={onSelectLayer} onHover={onHoverLayer} onDrop={drop} />
+          <Layer key={node.key} node={node} depth={0} expand={words.length > 0} selectedLoc={selectedLoc} onSelect={onSelectLayer} onHover={onHoverLayer} onDrop={drop} />
         ))}
       </ul>
     </>
@@ -194,14 +309,25 @@ function Layers({ tree, activeStory, selectedLoc, onSelectLayer, onHoverLayer, o
 interface LayerProps {
   node: LayerNode;
   depth: number;
+  /** Recherche en cours : tout est déplié, pour montrer le chemin des résultats. */
+  expand?: boolean;
   selectedLoc: string | null;
   onSelect: (loc: string) => void;
   onHover: (loc: string | null) => void;
   onDrop: (target: LayerNode, position: InsertPosition) => void;
 }
 
-function Layer({ node, depth, selectedLoc, onSelect, onHover, onDrop }: LayerProps) {
-  const [open, setOpen] = useState(depth < 3);
+const containsLoc = (node: LayerNode, loc: string): boolean => node.children.some((c) => c.loc === loc || containsLoc(c, loc));
+
+function Layer({ node, depth, expand = false, selectedLoc, onSelect, onHover, onDrop }: LayerProps) {
+  const [opened, setOpen] = useState(depth < 3);
+  // Le chemin jusqu'au calque sélectionné s'ouvre de lui-même.
+  const leadsToSelection = useMemo(() => selectedLoc !== null && selectedLoc !== node.loc && containsLoc(node, selectedLoc), [node, selectedLoc]);
+  const open = expand || opened || leadsToSelection;
+  const row = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (selectedLoc === node.loc) row.current?.scrollIntoView({ block: 'nearest' });
+  }, [selectedLoc, node.loc]);
   const [indicator, setIndicator] = useState<InsertPosition | 'invalid' | null>(null);
   const file = fileOf(node.loc).split('/').pop();
   const isComponent = /^[A-Z]/.test(node.name) && !BUILTINS.has(node.name);
@@ -218,6 +344,7 @@ function Layer({ node, depth, selectedLoc, onSelect, onHover, onDrop }: LayerPro
   return (
     <li>
       <div
+        ref={row}
         className={`layer ${selectedLoc === node.loc ? 'selected' : ''} ${indicator ? `drop-${indicator}` : ''}`}
         style={{ paddingLeft: 8 + depth * 12 }}
         draggable
@@ -251,12 +378,17 @@ function Layer({ node, depth, selectedLoc, onSelect, onHover, onDrop }: LayerPro
           {open ? '▾' : '▸'}
         </button>
         <span className={isComponent ? 'component' : ''}>{isComponent ? '◇ ' : ''}{node.name}</span>
+        {node.z !== undefined && (
+          <span className="layer-z" title={`zIndex ${node.z} : passe ${node.z > 0 ? 'devant' : 'derrière'} ses frères`}>
+            z {node.z}
+          </span>
+        )}
         <span className="muted small">{file}</span>
       </div>
       {open && node.children.length > 0 && (
         <ul>
           {node.children.map((child) => (
-            <Layer key={child.key} node={child} depth={depth + 1} selectedLoc={selectedLoc} onSelect={onSelect} onHover={onHover} onDrop={onDrop} />
+            <Layer key={child.key} node={child} depth={depth + 1} expand={expand} selectedLoc={selectedLoc} onSelect={onSelect} onHover={onHover} onDrop={onDrop} />
           ))}
         </ul>
       )}
@@ -264,8 +396,7 @@ function Layer({ node, depth, selectedLoc, onSelect, onHover, onDrop }: LayerPro
   );
 }
 
-function Components({ project, selection, onEdit, onOpenComponent }: Props) {
-  const [query, setQuery] = useState('');
+function Components({ project, selection, onEdit, onOpenComponent, words }: TabProps) {
   const [view, setView] = useLibraryView('rn-canvas:library-view:panel');
   // Le cadre des aperçus, une fois chargé, reste monté même en vue Liste (son chargement est long).
   const [galleryWanted, setGalleryWanted] = useState(view === 'previews');
@@ -274,7 +405,7 @@ function Components({ project, selection, onEdit, onOpenComponent }: Props) {
   }, [view]);
   const groups = new Map<string, ComponentEntry[]>();
   for (const c of project.components) {
-    if (query && !c.name.toLowerCase().includes(query.toLowerCase())) continue;
+    if (words.length && !matches(words, c.name, c.group)) continue;
     groups.set(c.group, [...(groups.get(c.group) ?? []), c]);
   }
 
@@ -295,7 +426,6 @@ function Components({ project, selection, onEdit, onOpenComponent }: Props) {
   return (
     <>
       <div className="library-popover-head">
-        <input className="search" placeholder="Rechercher un composant" value={query} onChange={(e) => setQuery(e.target.value)} />
         <ViewToggle view={view} onChange={setView} />
       </div>
       <p className="hint small">
@@ -334,7 +464,7 @@ function Components({ project, selection, onEdit, onOpenComponent }: Props) {
 
 const BUILTINS = new Set(['View', 'Text', 'Image', 'ScrollView', 'FlatList', 'SectionList', 'TextInput', 'Pressable', 'TouchableOpacity', 'TouchableHighlight', 'TouchableWithoutFeedback', 'SafeAreaView', 'KeyboardAvoidingView', 'ActivityIndicator', 'Switch', 'Modal', 'ImageBackground']);
 
-function Theme({ project, onEdit }: Props) {
+function Theme({ project, onEdit, words }: TabProps) {
   const theme = project.theme;
   if (!theme) {
     return (
@@ -349,7 +479,7 @@ function Theme({ project, onEdit }: Props) {
       <p className="hint small">
         {theme.file} — une modification s'applique à toute l'app.
       </p>
-      {theme.tokens.map((token) => {
+      {theme.tokens.filter((t) => !words.length || matches(words, t.path, displayValue(t.value))).map((token) => {
         const text = displayValue(token.value);
         const hex = toHex(text);
         const editable = token.value.kind !== 'expression';
