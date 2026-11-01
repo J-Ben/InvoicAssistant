@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { storyUrl } from '../src/editor/urls.ts';
+import { storyUrl } from '../src/shared/urls.ts';
 
 const story = { id: 'canvas/Accueil.canvas.tsx#Actuel', file: 'canvas/Accueil.canvas.tsx', exportName: 'Actuel', title: 'Actuel' };
 

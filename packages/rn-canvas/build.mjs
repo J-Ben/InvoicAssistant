@@ -35,6 +35,8 @@ const editor = {
   minify: !watch,
   sourcemap: true,
   loader: { '.css': 'css' },
+  // Les routes du serveur (police des icônes…) sont servies à l'exécution, pas embarquées.
+  external: ['/api/*'],
   define: { 'process.env.NODE_ENV': JSON.stringify(watch ? 'development' : 'production'), __RNC_BUILD__: JSON.stringify(BUILD) },
   logLevel: 'info',
 };

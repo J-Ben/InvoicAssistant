@@ -16,6 +16,7 @@ import type { SnapshotInfo, SnapshotState, SnapshotStatus, StoryEntry } from '..
 import { Browser, engineUnavailable, findBrowser, type Page, sleep } from './cdp.ts';
 import { DependencyGraph } from './deps.ts';
 import type { Project } from './project.ts';
+import { storyUrl } from '../shared/urls.ts';
 
 /** Version du format des captures : la changer refait toutes les images. */
 const FORMAT = 'v1';
@@ -24,13 +25,21 @@ const CONCURRENCY = 2;
 const PIXEL_RATIO = 2;
 /** Écran affiché et DOM immobile depuis ce délai : on capture. */
 const QUIET = 600;
-/** Attente maximale d'un écran (une fois le bundle compilé), puis du premier (compilation par Metro). */
-const MAX_WAIT = 15_000;
+/**
+ * Attente maximale d'un écran une fois l'app compilée, et du premier (compilation par Metro). Même
+ * compilée, l'app d'un gros projet compile encore à la demande le code de chaque route (expo-router) :
+ * plusieurs dizaines de secondes pour un écran jamais affiché.
+ */
+const MAX_WAIT = 60_000;
 const COLD_WAIT = 240_000;
 /** Navigateur des captures fermé après ce délai sans rien à capturer (il redémarre au besoin). */
 const IDLE_CLOSE = 30_000;
-/** Délai pour qu'une page chargée réponde à une évaluation simple. */
+/**
+ * Délai pour qu'une page chargée réponde à une évaluation simple. Au premier écran, la page exécute
+ * pour la première fois tout le code de l'app : plusieurs secondes sur un gros projet.
+ */
 const PING_WAIT = 5_000;
+const COLD_PING_WAIT = 60_000;
 /** Erreurs « Maximum update depth exceeded » au-delà desquelles l'écran est déclaré en boucle. */
 const LOOP_ERRORS = 5;
 
@@ -113,6 +122,8 @@ export class SnapshotEngine {
   private hashes = new Map<string, string>();
   private stories: StoryEntry[] = [];
   private queue: string[] = [];
+  /** Écrans déjà retentés après une absence de réponse (une seule nouvelle tentative, en fin de file). */
+  private retried = new Set<string>();
   private running = new Set<string>();
   private browser: Browser | null = null;
   private starting: Promise<void> | null = null;
@@ -294,15 +305,18 @@ export class SnapshotEngine {
         // L'autre onglet a pu vider la file pendant l'ouverture de celui-ci.
         const key = this.queue.shift();
         if (!key) break;
+        let reached = false;
         try {
-          await this.capture(page, key);
+          reached = await this.capture(page, key);
         } catch (error) {
           if (!(error instanceof StuckPage)) throw error;
           // L'onglet ne répond plus : fermé (côté navigateur, ça marche même page bloquée), un neuf suit.
           void page.close();
           page = null;
         }
-        if (!this.warm) {
+        // L'app n'est « chaude » (compilée par Metro) qu'après un écran qui a vraiment répondu : un premier
+        // écran en échec pendant la compilation ne doit pas faire passer les suivants aux délais courts.
+        if (!this.warm && reached) {
           this.warm = true;
           void this.pump();
         }
@@ -334,22 +348,26 @@ export class SnapshotEngine {
     }
   }
 
-  private async capture(page: Page, key: string) {
+  /** Capture un écran ; vrai si la page a répondu (l'app est donc compilée et s'exécute). */
+  private async capture(page: Page, key: string): Promise<boolean> {
     const device = this.device!;
     const id = key.slice(key.indexOf('|') + 1);
     const version = this.hashes.get(id);
-    if (!version || !key.startsWith(`${device.width}x${device.height}|`)) return;
+    if (!version || !key.startsWith(`${device.width}x${device.height}|`)) return false;
     this.running.add(key);
+    let reached = false;
     this.notify('snapshots', { running: id });
     try {
-      const origin = new URL(this.project.config.appUrl).origin;
+      // Même adresse que dans l'éditeur : un sous-domaine par écran, donc un stockage à lui. Sur une même
+      // origine, deux onglets ne peuvent pas ouvrir la même base SQLite (OPFS) en même temps.
+      const file = id.slice(0, id.lastIndexOf('#'));
+      const url = new URL(storyUrl(this.project.config.appUrl, { id, file, exportName: id.slice(id.lastIndexOf('#') + 1) }, this.project.config.isolateStories));
+      const origin = url.origin;
       // Chaque écran part d'un stockage vide, comme dans son sous-domaine de l'éditeur.
       await within(page.send('Storage.clearDataForOrigin', { origin, storageTypes: 'all' }), 10_000, 'Stockage').catch((error) => {
         if (error instanceof StuckPage) throw error;
       });
       await within(page.send('Emulation.setDeviceMetricsOverride', { width: device.width, height: device.height, deviceScaleFactor: PIXEL_RATIO, mobile: true }), 10_000, 'Taille');
-      const url = new URL(this.project.config.appUrl);
-      url.searchParams.set('rnc-story', id);
       url.searchParams.set('rnc-capture', '1');
       const max = this.warm ? MAX_WAIT : COLD_WAIT;
       const loaded = new Promise<void>((resolve) => {
@@ -363,12 +381,13 @@ export class SnapshotEngine {
       await Promise.race([loaded, sleep(max)]);
       // Un écran qui bloque la page (boucle, calcul sans fin, mémoire) est écarté en quelques secondes,
       // pour ne pas retenir la file : il ne répond plus, ou ne répond pas avant la fin de l'attente.
-      await within(page.evaluate('1'), PING_WAIT, 'Réponse de la page');
+      await within(page.evaluate('1'), this.warm ? PING_WAIT : COLD_PING_WAIT, 'Réponse de la page');
       const result = await Promise.race([
         page.evaluate<{ state: 'ok' | 'error' | 'loop' | 'empty'; message: string | null }>(waiter(max)),
         sleep(max + 5000).then(() => null),
       ]);
       if (!result) throw new StuckPage("pas de réponse pendant l'attente de l'affichage");
+      reached = true;
       const shot = await within(page.send<{ data: string }>('Page.captureScreenshot', { format: 'webp', quality: 82 }), 20_000, 'Capture');
       fs.mkdirSync(this.dir, { recursive: true });
       fs.writeFileSync(this.file(key), Buffer.from(shot.data, 'base64'));
@@ -379,11 +398,20 @@ export class SnapshotEngine {
           : result.state === 'empty'
             ? "Rien d'affiché après le délai : données vides ou redirection ?"
             : (result.message ?? undefined);
+      this.retried.delete(key);
       this.index[key] = { version, state, ...(message ? { message } : {}) };
       this.save();
       this.notify('snapshot', { id, device: `${device.width}x${device.height}`, info: this.info(id, device) });
     } catch (error) {
       const stuck = error instanceof StuckPage;
+      // Pas de réponse : souvent une machine chargée (compilation, autres onglets) plutôt qu'une boucle.
+      // L'écran repasse une fois en fin de file avant d'être déclaré bloqué.
+      if (stuck && !this.retried.has(key)) {
+        this.retried.add(key);
+        this.queue.push(key);
+        throw error;
+      }
+      this.retried.delete(key);
       this.index[key] = stuck
         ? { version, state: 'loop', message: `L'écran ne répond plus (${(error as Error).message}) : boucle ou calcul sans fin ?` }
         : { version, state: 'error', message: `Capture impossible : ${(error as Error).message}` };
@@ -395,6 +423,7 @@ export class SnapshotEngine {
       // Code modifié pendant la capture : l'image faite est déjà périmée, l'écran repasse en file.
       if (this.hashes.get(id) !== version) this.schedule();
     }
+    return reached;
   }
 
   private save() {

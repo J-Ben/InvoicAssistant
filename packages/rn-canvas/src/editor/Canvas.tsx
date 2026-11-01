@@ -2,7 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import { createPortal } from 'react-dom';
 import type { BoardGroup, BoardNote, BoardPage, SnapshotInfo, StoryEntry } from '../shared/protocol.ts';
 import { type FlowData, FlowLayer, FlowLegend, type FlowMode, layoutFlows, viewFlows } from './Flows.tsx';
-import { storyUrl } from './urls.ts';
+import { storyUrl } from '../shared/urls.ts';
 import { PALETTE_GAP, PALETTE_WIDTH, paletteSide } from './palette.ts';
 
 /** `shown` : l'écran a affiché quelque chose ; `empty` : prêt mais toujours vide après un long délai. */

@@ -1,11 +1,13 @@
-import type { StoryEntry } from '../shared/protocol.ts';
+import type { StoryEntry } from './protocol.ts';
 
 /**
  * URL d'un écran. Isolé : un sous-domaine de localhost par écran (`accueil-actuel-1k2j.localhost`),
  * que les navigateurs résolvent vers la machine locale ; chaque écran a ainsi son propre stockage.
  * `generation` > 0 donne un autre sous-domaine, donc un stockage neuf (base restée verrouillée).
+ * Partagée par l'éditeur et par les captures : un écran a la même adresse, donc le même stockage
+ * isolé, dans les deux.
  */
-export function storyUrl(appUrl: string, story: StoryEntry, isolate: boolean, generation = 0): string {
+export function storyUrl(appUrl: string, story: Pick<StoryEntry, 'id' | 'file' | 'exportName'>, isolate: boolean, generation = 0): string {
   const url = new URL(appUrl);
   if (isolate && url.hostname === 'localhost') {
     let hash = 5381;
