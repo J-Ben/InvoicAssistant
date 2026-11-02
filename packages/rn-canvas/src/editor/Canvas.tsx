@@ -3,6 +3,8 @@ import { createPortal } from 'react-dom';
 import type { BoardGroup, BoardNote, BoardPage, SnapshotInfo, StoryEntry } from '../shared/protocol.ts';
 import { type FlowData, FlowLayer, FlowLegend, type FlowMode, layoutFlows, viewFlows } from './Flows.tsx';
 import { storyUrl } from '../shared/urls.ts';
+import { api } from './api.ts';
+import { seconds } from './HistoryDialog.tsx';
 import { PALETTE_GAP, PALETTE_WIDTH, paletteSide } from './palette.ts';
 
 /** `shown` : l'écran a affiché quelque chose ; `empty` : prêt mais toujours vide après un long délai. */
@@ -539,6 +541,24 @@ export function Canvas(props: Props) {
     const timer = window.setTimeout(() => setAdmitted((a) => ({ ...a })), 5000);
     return () => window.clearTimeout(timer);
   }, [admitted, live, loaded, errors, onUnload]);
+
+  // Temps de chargement en direct de chaque écran (de son montage à son affichage), affiché à côté de
+  // son nom et enregistré dans l'historique des chargements.
+  const [liveTimes, setLiveTimes] = useState<Record<string, number>>({});
+  const reported = useRef(new Set<string>());
+  useEffect(() => {
+    const now = Date.now();
+    for (const id of reported.current) if (!(id in admitted)) reported.current.delete(id);
+    const done = Object.keys(loaded).filter((id) => id in admitted && !reported.current.has(id));
+    if (!done.length) return;
+    const times: Record<string, number> = {};
+    for (const id of done) {
+      reported.current.add(id);
+      times[id] = now - admitted[id];
+      api.liveLoad(id, times[id], !errors[id]).catch(() => {});
+    }
+    setLiveTimes((t) => ({ ...t, ...times }));
+  }, [loaded, admitted, errors]);
 
   // Emprise des écrans affichés, pour « tout afficher » et le calque des flèches.
   const bounds = useMemo(() => {
@@ -1093,6 +1113,7 @@ export const Default = { props: {} };`}</pre>
                 title={`${story.id}\nGlisser pour déplacer l'écran (Alt : sans aimantation) · Maj+clic : sélection multiple`}
               >
                 {story.file.split('/').pop()!.replace(/\.canvas\.\w+$/, '')} · {story.title}
+                <LoadTime live={liveTimes[story.id]} capture={snapshots?.items[story.id]?.ms} />
               </button>
               <div className="frame" style={{ width: device.width, height: device.height }}>
                 {snapshots && <SnapshotFrame story={story} info={snapshots.items[story.id]} url={snapshots.url} running={snapshots.running.includes(story.id)} live={live.has(story.id)} shown={Boolean(loaded[story.id])} liveError={Boolean(errors[story.id])}
@@ -1501,5 +1522,17 @@ function Note({ note, shift, editing, moving, onEdit, onChange, onRemove, onPoin
       </div>
       <div className="board-resize note-resize" onPointerDown={onResizeDown} onPointerMove={onPointerMove} onPointerUp={onPointerUp} onPointerCancel={onPointerUp} title="Élargir" />
     </div>
+  );
+}
+
+/** Durée de chargement à côté du nom de l'écran : en direct si chargé dans l'éditeur, sinon sa capture. */
+function LoadTime({ live, capture }: { live?: number; capture?: number }) {
+  const ms = live ?? capture;
+  if (ms === undefined) return null;
+  return (
+    <span className="load-time" title={live !== undefined ? `Chargé en direct en ${seconds(live)}${capture !== undefined ? ` · capture : ${seconds(capture)}` : ''}` : `Capture faite en ${seconds(ms)} (chargement de l'écran compris)`}>
+      {' · '}
+      {seconds(ms)}
+    </span>
   );
 }

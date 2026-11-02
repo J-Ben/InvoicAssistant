@@ -11,6 +11,7 @@ import { LibraryBar } from './LibraryBar.tsx';
 import { PagesBar, useBoard } from './Pages.tsx';
 import { BranchMenu } from './BranchMenu.tsx';
 import { MemoryBadge } from './MemoryBadge.tsx';
+import { HistoryDialog } from './HistoryDialog.tsx';
 import { SelectionToolbar } from './SelectionToolbar.tsx';
 import { defaultTarget, mergedStyle, styleEntries } from './styleModel.ts';
 import { type InstanceScope, numberOf, type Styleless } from './fields.tsx';
@@ -66,6 +67,8 @@ export function App() {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [hidden, setHidden] = useState<Set<string>>(new Set());
   const [mode, setMode] = useState<CanvasMode>('inspect');
+  const [showHistory, setShowHistory] = useState(false);
+  const closeHistory = useCallback(() => setShowHistory(false), []);
   // Outil du canevas (Sélection, Main) : avec le mode, il forme les trois outils de la barre du haut.
   const [tool, setToolState] = useState<Tool>(readTool);
   const setTool = useCallback((next: Tool) => {
@@ -865,6 +868,10 @@ export function App() {
         </div>
         <div className="topbar-zone right">
           <MemoryBadge />
+          <button className="history-button" onClick={() => setShowHistory(true)} title="Historique : temps de chargement des écrans par lancement, modifications du projet" aria-label="Historique">
+            <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M3.5 12a8.5 8.5 0 1 0 2.5-6" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" /><path d="M3 4v4h4" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" /><path d="M12 7.5V12l3 2" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" /></svg>
+          </button>
+          {showHistory && <HistoryDialog onClose={closeHistory} />}
           <DisplayMenu display={display} onChange={setDisplay} onReset={resetDisplay} snapshotsAvailable={Boolean(snapStatus?.engine)} />
           <div className="history" role="group" aria-label="Historique">
             <button aria-label="Annuler" disabled={!history.undo} onClick={() => travel('undo')} title={history.undo ? `Annuler ${history.undo} (⌘Z)` : 'Rien à annuler'}>

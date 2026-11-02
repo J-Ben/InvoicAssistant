@@ -56,6 +56,8 @@ interface Entry {
   version: string;
   state: SnapshotState;
   message?: string;
+  /** Durée de la capture (chargement de l'écran compris), en ms. */
+  ms?: number;
 }
 
 type Notify = (event: string, data?: unknown) => void;
@@ -132,6 +134,9 @@ export class SnapshotEngine {
   private browser: Browser | null = null;
   private starting: Promise<void> | null = null;
   private warm = false;
+  /** Captures reprises du lancement précédent : notées une fois dans l'historique des chargements. */
+  private reportedReuse = false;
+  private readonly createdAt = Date.now();
   private stopped = false;
   private workers = 0;
   private reason: string | null;
@@ -180,7 +185,7 @@ export class SnapshotEngine {
     const current = this.hashes.get(id);
     if (!entry) return { state: 'pending', version: null };
     const outdated = entry.version !== current;
-    return { state: outdated ? 'stale' : entry.state, version: entry.version, ...(entry.message ? { message: entry.message } : {}) };
+    return { state: outdated ? 'stale' : entry.state, version: entry.version, ...(entry.message ? { message: entry.message } : {}), ...(entry.ms !== undefined ? { ms: entry.ms } : {}) };
   }
 
   status(device: DeviceSize): SnapshotStatus {
@@ -249,6 +254,10 @@ export class SnapshotEngine {
       })
       .map((s) => this.key(s.id, device))
       .filter((key) => !this.running.has(key));
+    if (!this.reportedReuse) {
+      this.reportedReuse = true;
+      this.project.journal.reused(this.stories.length - wanted.length, `${device.width}x${device.height}`);
+    }
     // L'ordre déjà établi (priorités de l'éditeur) est gardé ; les nouveaux viennent après.
     this.queue = [...this.queue.filter((key) => wanted.includes(key)), ...wanted.filter((key) => !this.queue.includes(key))];
     if (this.queue.length) void this.pump();
@@ -346,7 +355,10 @@ export class SnapshotEngine {
         // rendu serveur (expo-router en sortie static/server) à chaque essai, pendant la compilation.
         // Toute réponse (même 404, middleware absent) signifie qu'Expo écoute.
         const res = await fetch(new URL('/__rn-canvas', this.project.config.appUrl), { signal: AbortSignal.timeout(5000) });
-        if (res.status < 500) return;
+        if (res.status < 500) {
+          this.project.journal.appReady(Date.now() - this.createdAt);
+          return;
+        }
       } catch {
         // Expo démarre encore.
       }
@@ -363,6 +375,7 @@ export class SnapshotEngine {
     if (!version || !key.startsWith(`${device.width}x${device.height}|`)) return false;
     this.running.add(key);
     let reached = false;
+    const started = Date.now();
     this.notify('snapshots', { running: id });
     try {
       // Même adresse que dans l'éditeur : un sous-domaine par écran, donc un stockage à lui. Sur une même
@@ -406,7 +419,9 @@ export class SnapshotEngine {
             ? "Rien d'affiché après le délai : données vides ou redirection ?"
             : (result.message ?? undefined);
       this.retried.delete(key);
-      this.index[key] = { version, state, ...(message ? { message } : {}) };
+      const ms = Date.now() - started;
+      this.index[key] = { version, state, ...(message ? { message } : {}), ms };
+      this.project.journal.screen({ id, ms, kind: 'capture', ok: state === 'ok' });
       this.save();
       this.notify('snapshot', { id, device: `${device.width}x${device.height}`, info: this.info(id, device) });
     } catch (error) {
@@ -419,6 +434,7 @@ export class SnapshotEngine {
         throw error;
       }
       this.retried.delete(key);
+      this.project.journal.screen({ id, ms: Date.now() - started, kind: 'capture', ok: false });
       this.index[key] = stuck
         ? { version, state: 'loop', message: `L'écran ne répond plus (${(error as Error).message}) : boucle ou calcul sans fin ?` }
         : { version, state: 'error', message: `Capture impossible : ${(error as Error).message}` };

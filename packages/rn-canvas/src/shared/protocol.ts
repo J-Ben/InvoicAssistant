@@ -374,6 +374,8 @@ export interface SnapshotInfo {
   /** Version de l'image (empreinte du code de l'écran) ; null tant qu'aucune n'existe. */
   version: string | null;
   message?: string;
+  /** Durée de la dernière capture (chargement de l'écran compris), en ms. */
+  ms?: number;
 }
 
 export interface SnapshotStatus {
@@ -568,4 +570,52 @@ export interface Conventions {
 /** Ce qu'il faut à la fenêtre « Créer » : les conventions, et les écrans qu'on peut copier. */
 export interface CreateInfo extends Conventions {
   screens: { name: string; file: string }[];
+}
+
+// ---- Historique (chargements, modifications) ----
+
+export interface ScreenTiming {
+  id: string;
+  ms: number;
+  /** `capture` : image prise en arrière-plan ; `live` : écran chargé en direct dans l'éditeur. */
+  kind: 'capture' | 'live';
+  ok: boolean;
+}
+
+/** Un lancement de l'éditeur et les temps de chargement de ses écrans. */
+export interface LoadSession {
+  id: string;
+  startedAt: string;
+  /** Dernière mise à jour (fin des captures, dernier écran chargé…). */
+  updatedAt: string;
+  version: string;
+  /** Appareil des captures (`393x852`). */
+  device: string | null;
+  /** Temps entre le lancement de l'éditeur et la première réponse d'Expo. */
+  appReadyMs: number | null;
+  /** Captures reprises du lancement précédent (code inchangé), donc sans attente. */
+  reused: number;
+  screens: ScreenTiming[];
+}
+
+/** Modification faite depuis l'éditeur. */
+export interface ChangeEntry {
+  at: string;
+  action: 'edit' | 'undo' | 'redo' | 'create';
+  label: string;
+  file: string;
+}
+
+export interface CommitInfo {
+  hash: string;
+  date: string;
+  author: string;
+  subject: string;
+  files: string[];
+}
+
+export interface JournalResponse {
+  sessions: LoadSession[];
+  changes: ChangeEntry[];
+  commits: CommitInfo[];
 }

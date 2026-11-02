@@ -166,6 +166,8 @@ async function dev() {
   const project = new Project(root);
   const port = Number(flag('port') === true ? 7007 : (flag('port') ?? 7007));
   project.writeManifest();
+  // Historique des chargements : un enregistrement par lancement de l'éditeur.
+  project.journal.startSession(JSON.parse(fs.readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version);
 
   const snapshots: { current: SnapshotEngine | null } = { current: null };
   const server = await startServer(project, { port, editorDir: EDITOR_DIR, snapshots });
@@ -237,6 +239,7 @@ async function dev() {
   const stop = async () => {
     expo?.kill('SIGINT');
     await snapshots.current?.close();
+    project.journal.flush();
     await server.close();
     process.exit(0);
   };

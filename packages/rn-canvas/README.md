@@ -290,3 +290,10 @@ npm run dev:editor  # reconstruction à la volée
 npm test            # tests (node --test)
 npm run typecheck
 ```
+
+## Historique
+
+Le bouton horloge de la barre du haut ouvre l'historique du projet (gardé dans `node_modules/.cache/rn-canvas/journal.json`, sur cette machine) :
+
+- **Chargements** : un enregistrement par lancement de l'éditeur, avec l'attente d'Expo, la durée de la capture de chaque écran, les écrans chargés en direct et les captures reprises du lancement précédent. Chaque écran est comparé à son dernier chargement connu (plus lent en rouge, plus rapide en vert). La durée du dernier chargement s'affiche aussi à côté du nom de l'écran sur le canevas.
+- **Modifications** : chaque modification faite depuis l'éditeur (style, texte, déplacement, création de composant ou d'écran), annulation et rétablissement, avec l'heure et le fichier, puis les derniers commits git de la branche.

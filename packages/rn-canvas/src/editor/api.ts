@@ -1,4 +1,4 @@
-import type { Board, CreateInfo, CreateRequest, CreateResult, EditRequest, EditResult, FlowLink, GitInfo, HistoryState, InspectResult, MemoryStats, ProjectInfo, SnapshotStatus } from '../shared/protocol.ts';
+import type { Board, CreateInfo, CreateRequest, CreateResult, EditRequest, EditResult, FlowLink, GitInfo, HistoryState, InspectResult, JournalResponse, MemoryStats, ProjectInfo, SnapshotStatus } from '../shared/protocol.ts';
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
   const res = await fetch(url, init);
@@ -23,6 +23,9 @@ export const api = {
   edit: (body: EditRequest) =>
     request<EditResult>('/api/edit', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }),
   history: () => request<HistoryState>('/api/history'),
+  journal: () => request<JournalResponse>('/api/journal'),
+  liveLoad: (id: string, ms: number, ok: boolean) =>
+    request<{ ok: true }>('/api/journal/live', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id, ms, ok }) }),
   board: () => request<Board>('/api/board'),
   saveBoard: (board: Board) => request<Board>('/api/board', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(board) }),
   missingRoutes: () => request<{ file: string; name: string; title: string; params: string[] }[]>('/api/routes'),

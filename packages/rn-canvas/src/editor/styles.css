@@ -640,3 +640,39 @@ textarea { resize: vertical; }
 .layer-z { flex: none; margin-left: 4px; padding: 0 4px; border-radius: 4px; background: var(--accent-soft); color: var(--accent); font-size: 10px; font-variant-numeric: tabular-nums; }
 /* Appareil : le menu fermé prend la largeur du nom choisi, pas celle du plus long de la liste. */
 .topbar .device select { field-sizing: content; max-width: 150px; text-overflow: ellipsis; }
+
+/* Historique : chargements par lancement, modifications. */
+.history-button { flex: none; display: grid; place-items: center; width: 28px; height: 28px; border: 0; border-radius: 6px; background: none; color: var(--muted); cursor: pointer; }
+.history-button:hover { background: var(--input); color: var(--text); }
+.load-time { color: var(--muted); font-weight: 400; font-variant-numeric: tabular-nums; }
+.history-dialog { width: min(820px, calc(100vw - 32px)); }
+.history-dialog header .segmented { margin-right: auto; margin-left: 12px; }
+.history-dialog h3 { margin: 8px 0 4px; font-size: 13px; }
+.history-dialog h4 { margin: 10px 0 4px; font-size: 12px; color: var(--muted); font-weight: 500; text-transform: capitalize; }
+.history-list { display: flex; flex-direction: column; gap: 6px; }
+.history-session { border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+.history-session-head { width: 100%; display: flex; align-items: center; gap: 10px; padding: 8px 10px; border: 0; background: none; color: var(--text); text-align: left; cursor: pointer; font-size: 12px; }
+.history-session-head:hover, .history-session.open .history-session-head { background: var(--bg); }
+.history-when { font-weight: 600; white-space: nowrap; }
+.history-figures { display: flex; flex-wrap: wrap; gap: 4px 12px; margin-left: auto; color: var(--muted); font-variant-numeric: tabular-nums; }
+.history-chevron { color: var(--muted); }
+.history-session-body { padding: 6px 10px 10px; }
+.history-table { width: 100%; border-collapse: collapse; font-size: 12px; font-variant-numeric: tabular-nums; }
+.history-table th { text-align: left; font-weight: 500; color: var(--muted); padding: 4px 6px; border-bottom: 1px solid var(--border); }
+.history-table td { padding: 4px 6px; border-bottom: 1px solid var(--border); position: relative; white-space: nowrap; }
+.history-table td:first-child { max-width: 320px; overflow: hidden; text-overflow: ellipsis; }
+.history-table tr.failed td { color: #d92d20; }
+.history-bar { position: absolute; left: 0; top: 50%; height: 16px; margin-top: -8px; background: var(--accent); opacity: 0.12; border-radius: 3px; pointer-events: none; }
+.history-delta { font-size: 11px; }
+.history-delta.slower { color: #d92d20; }
+.history-delta.faster { color: #12b76a; }
+.history-delta.same { color: var(--muted); }
+.history-changes { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
+.history-changes li { display: grid; grid-template-columns: 48px 22px 1fr auto; align-items: baseline; gap: 6px; padding: 4px 2px; border-bottom: 1px solid var(--border); font-size: 12px; }
+.history-time { color: var(--muted); font-variant-numeric: tabular-nums; }
+.history-action { text-align: center; color: var(--accent); }
+.change-undo .history-action, .change-redo .history-action { color: var(--muted); }
+.history-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.history-file { max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.history-hash { font-size: 11px; color: var(--muted); }
+.history-changes li:has(.history-hash) { grid-template-columns: 48px 64px 1fr auto; }

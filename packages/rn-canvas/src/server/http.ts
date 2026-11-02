@@ -9,7 +9,7 @@ import http from 'node:http';
 import path from 'node:path';
 import type { EditRequest } from '../shared/protocol.ts';
 import type { CreateRequest } from './create.ts';
-import { createBranch, gitInfo, switchBranch } from './git.ts';
+import { createBranch, gitInfo, recentCommits, switchBranch } from './git.ts';
 import { memoryStats } from './stats.ts';
 import { iconFont, iconGlyphs, imageFile, importImage, projectFonts, projectImages } from './snippets.ts';
 import { SourceError } from './inspect.ts';
@@ -147,6 +147,16 @@ export function startServer(project: Project, options: ServerOptions): Promise<C
       }
       if (url.pathname === '/api/flows' && req.method === 'GET') return send(res, 200, project.flows());
       if (url.pathname === '/api/history' && req.method === 'GET') return send(res, 200, project.history());
+      // Historique local : chargements par lancement, modifications faites depuis l'éditeur, commits.
+      if (url.pathname === '/api/journal' && req.method === 'GET') {
+        return send(res, 200, { sessions: project.journal.sessions(), changes: project.journal.changes(), commits: await recentCommits(project.root) });
+      }
+      if (url.pathname === '/api/journal/live' && req.method === 'POST') {
+        const body = (await readJson(req)) as { id?: unknown; ms?: unknown; ok?: unknown };
+        if (typeof body.id !== 'string' || typeof body.ms !== 'number' || !(body.ms >= 0)) throw new SourceError('Temps de chargement invalide.');
+        project.journal.screen({ id: body.id, ms: Math.round(body.ms), kind: 'live', ok: body.ok !== false });
+        return send(res, 200, { ok: true });
+      }
       if (url.pathname === '/api/undo' && req.method === 'POST') return send(res, 200, project.undo());
       if (url.pathname === '/api/redo' && req.method === 'POST') return send(res, 200, project.redo());
 

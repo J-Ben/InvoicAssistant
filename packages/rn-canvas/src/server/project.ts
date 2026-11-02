@@ -10,6 +10,7 @@ import { setProp, setStyle, setText, setToken, themeObject } from './edit.ts';
 import { ANCHOR, examplesFile, generateExamples, writeIfChanged } from './examples.ts';
 import { matchRoute, navigationLinks, relativeImports, resolveImport, routesOf } from './flows.ts';
 import { navigationScreens } from './navigators.ts';
+import { Journal } from './journal.ts';
 import { stripJsonComments } from './setup.ts';
 import { SourceError, findElement, inspectElement, locOfIndex, meaningfulChildren, normalizeJsxText, sourceValue } from './inspect.ts';
 import { PRIMITIVES, componentsOf, requiredProps } from './library.ts';
@@ -77,9 +78,13 @@ export class Project {
   readonly root: string;
   readonly config: CanvasConfig;
 
+  /** Historique local : temps de chargement des écrans par lancement, modifications faites depuis l'éditeur. */
+  readonly journal: Journal;
+
   constructor(root: string) {
     this.root = path.resolve(root);
     this.config = loadConfig(this.root);
+    this.journal = new Journal(this.root);
   }
 
   /** Résout un chemin relatif au projet en refusant tout ce qui sort du projet ou de son code. */
@@ -512,6 +517,7 @@ export const Actuel: CanvasStory = {};
   create(request: CreateRequest): CreatePlan {
     const plan = this.planCreate(request);
     writePlan(this.root, plan);
+    this.journal.change({ action: 'create', label: `${request.kind === 'screen' ? 'Écran' : 'Composant'} ${plan.name} créé (${plan.files.length} fichier${plan.files.length > 1 ? 's' : ''})`, file: plan.main });
     this.conventionsCache = null;
     this.libraryCache.clear();
     this.writeManifest();
@@ -577,6 +583,7 @@ export const Actuel: CanvasStory = {};
     fs.writeFileSync(abs, entry[restore]);
     from.pop();
     to.push(entry);
+    this.journal.change({ action: restore === 'before' ? 'undo' : 'redo', label: entry.label, file: entry.file });
     return { ok: true, file: entry.file, loc: restore === 'before' ? entry.locBefore : entry.locAfter, history: this.history() };
   }
 
@@ -590,6 +597,7 @@ export const Actuel: CanvasStory = {};
         this.undoStack.push(entry);
         if (this.undoStack.length > HISTORY_LIMIT) this.undoStack.shift();
         this.redoStack = [];
+        this.journal.change({ action: 'edit', label: entry.label, file: entry.file });
       }
       return { ...result, history: this.history() };
     } finally {

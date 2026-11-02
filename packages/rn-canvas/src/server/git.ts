@@ -3,7 +3,7 @@
  * modifications en cours : elles suivraient dans l'autre branche, ou bloqueraient le changement.
  */
 import { execFile } from 'node:child_process';
-import type { GitInfo } from '../shared/protocol.ts';
+import type { CommitInfo, GitInfo } from '../shared/protocol.ts';
 import { SourceError } from './inspect.ts';
 
 const git = (root: string, args: string[]) =>
@@ -67,4 +67,21 @@ export async function createBranch(root: string, name: string, base?: string): P
   }
   await git(root, from ? ['switch', '-c', name, from] : ['switch', '-c', name]);
   return (await gitInfo(root))!;
+}
+
+/** Derniers commits de la branche courante (vide hors dépôt git). */
+export async function recentCommits(root: string, limit = 30): Promise<CommitInfo[]> {
+  try {
+    const out = await git(root, ['log', `-n${limit}`, '--date=iso-strict', '--name-only', '--format=%x1e%h%x1f%ad%x1f%an%x1f%s']);
+    return out
+      .split('\x1e')
+      .filter((block) => block.trim())
+      .map((block) => {
+        const [head, ...rest] = block.split('\n');
+        const [hash, date, author, subject] = head.split('\x1f');
+        return { hash, date, author, subject, files: rest.map((f) => f.trim()).filter(Boolean) };
+      });
+  } catch {
+    return [];
+  }
 }
