@@ -30,7 +30,14 @@ const MAX_DEPTH = 4;
  * Exemples des composants de `components` (fichier → noms exportés), ou null si le projet n'a pas
  * TypeScript. `specifier(file)` donne le chemin d'import d'un fichier depuis le fichier généré.
  */
-export function generateExamples(root: string, components: { file: string; name: string }[], specifier: (file: string) => string): GeneratedExamples | null {
+/** Date de référence des exemples, notée dans le fichier généré et reprise à chaque régénération. */
+export const ANCHOR = /Dates d'exemple relatives au (\d{4})-(\d{2})-(\d{2})/;
+
+/**
+ * `anchor` : jour de référence des dates d'exemple (« il y a 3 jours »…). Repris d'une génération à
+ * l'autre : sinon le fichier changerait chaque jour, et avec lui les captures de tous les écrans.
+ */
+export function generateExamples(root: string, components: { file: string; name: string }[], specifier: (file: string) => string, anchor: Date = new Date()): GeneratedExamples | null {
   let ts: typeof TS;
   try {
     ts = createRequire(path.join(root, 'package.json'))('typescript');
@@ -42,7 +49,8 @@ export function generateExamples(root: string, components: { file: string; name:
   const files = [...new Set(components.map((c) => path.join(root, c.file)))];
   const program = ts.createProgram(files, { ...(parsed?.options ?? {}), noEmit: true, skipLibCheck: true });
   const checker = program.getTypeChecker();
-  const today = new Date();
+  const today = anchor;
+  const pad = (n: number) => String(n).padStart(2, '0');
   const isoDay = (offset: number) => new Date(today.getFullYear(), today.getMonth(), Math.max(1, today.getDate() - offset)).toISOString().slice(0, 10);
 
   const imports = new Map<string, Set<string>>();
@@ -141,6 +149,8 @@ export function generateExamples(root: string, components: { file: string; name:
 // Généré par « npx rn-canvas examples » à partir des types TypeScript des props : valeurs plausibles,
 // pas forcément cohérentes entre elles. Relancer la commande réécrit ce fichier : pour garder un
 // exemple retouché, copiez-le dans \`examples\` de rn-canvas.config.tsx (prioritaire sur celui-ci).
+// Dates d'exemple relatives au ${today.getFullYear()}-${pad(today.getMonth() + 1)}-${pad(today.getDate())} (gardé d'une génération à l'autre : supprimez ce
+// fichier pour les rafraîchir).
 ${importLines.join('\n')}${importLines.length ? '\n' : ''}
 const noop = () => {};
 

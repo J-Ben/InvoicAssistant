@@ -132,3 +132,20 @@ export function InvoiceCard(props: { invoices: Invoice[]; project: Project; onPr
   assert.match(code, /summary: 'Texte d’exemple'|summary: 'Exemple'/);
   assert.ok(!code.includes('subtitle') && !code.includes('note:'), code);
 });
+
+test('exemples : dates relatives au jour de la première génération, gardé ensuite (captures stables)', async () => {
+  const { generateExamples, ANCHOR } = await import('../src/server/examples.ts');
+  const root = project({
+    'tsconfig.json': JSON.stringify({ compilerOptions: { strict: true, jsx: 'react-jsx' } }),
+    'src/components/Row.tsx': 'export function Row(props: { createdAt: string; date: Date }) { return null; }\n',
+  });
+  fs.mkdirSync(path.join(root, 'node_modules'), { recursive: true });
+  fs.symlinkSync(path.dirname(require.resolve('typescript/package.json')), path.join(root, 'node_modules/typescript'));
+  const gen = (anchor?: Date) => generateExamples(root, [{ file: 'src/components/Row.tsx', name: 'Row' }], (f) => `../${f}`, anchor)!.code;
+  const first = gen(new Date(2026, 9, 27));
+  assert.match(first, /Dates d'exemple relatives au 2026-10-27/);
+  const found = ANCHOR.exec(first)!;
+  // Régénéré un autre jour avec le jour lu dans le fichier : identique.
+  assert.equal(gen(new Date(Number(found[1]), Number(found[2]) - 1, Number(found[3]))), first);
+  assert.notEqual(gen(new Date(2026, 10, 2)), first);
+});

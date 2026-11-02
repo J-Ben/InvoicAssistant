@@ -10,6 +10,7 @@
  * code de leur écran (voir deps.ts) : une image n'est refaite que si ce code a changé.
  */
 import crypto from 'node:crypto';
+import os from 'node:os';
 import fs from 'node:fs';
 import path from 'node:path';
 import type { SnapshotInfo, SnapshotState, SnapshotStatus, StoryEntry } from '../shared/protocol.ts';
@@ -20,8 +21,11 @@ import { storyUrl } from '../shared/urls.ts';
 
 /** Version du format des captures : la changer refait toutes les images. */
 const FORMAT = 'v1';
-/** Onglets du navigateur des captures : chacun fait tourner une copie de l'app. */
-const CONCURRENCY = 2;
+/**
+ * Onglets du navigateur des captures, une fois l'app compilée : chacun fait tourner une copie de
+ * l'app (un cœur, quelques centaines de Mo). La moitié des cœurs, de 2 à 4.
+ */
+const CONCURRENCY = Math.min(4, Math.max(2, Math.floor(os.cpus().length / 2)));
 const PIXEL_RATIO = 2;
 /** Écran affiché et DOM immobile depuis ce délai : on capture. */
 const QUIET = 600;
@@ -338,8 +342,11 @@ export class SnapshotEngine {
   private async waitForApp() {
     for (let i = 0; !this.stopped; i++) {
       try {
-        const res = await fetch(this.project.config.appUrl, { signal: AbortSignal.timeout(2000) });
-        if (res.ok) return;
+        // Adresse légère du middleware rn-canvas (metro.cjs) : la page d'accueil de l'app déclencherait un
+        // rendu serveur (expo-router en sortie static/server) à chaque essai, pendant la compilation.
+        // Toute réponse (même 404, middleware absent) signifie qu'Expo écoute.
+        const res = await fetch(new URL('/__rn-canvas', this.project.config.appUrl), { signal: AbortSignal.timeout(5000) });
+        if (res.status < 500) return;
       } catch {
         // Expo démarre encore.
       }

@@ -7,7 +7,7 @@ import type { Board, ComponentEntry, CreateInfo, EditRequest, FlowLink, EditResu
 import { emptyBoard, normalizeBoard, parseLoc } from '../shared/protocol.ts';
 import { type AstNode, type Patch, type SourceFile, applyPatches, findProperty, jsxName, moduleDeclarators, parse, programOf, propertyKey, unwrap, walk } from './ast.ts';
 import { setProp, setStyle, setText, setToken, themeObject } from './edit.ts';
-import { examplesFile, generateExamples, writeIfChanged } from './examples.ts';
+import { ANCHOR, examplesFile, generateExamples, writeIfChanged } from './examples.ts';
 import { matchRoute, navigationLinks, relativeImports, resolveImport, routesOf } from './flows.ts';
 import { navigationScreens } from './navigators.ts';
 import { stripJsonComments } from './setup.ts';
@@ -240,7 +240,16 @@ export default manifest;
     // Composants de l'app seulement (pas les enveloppes du canevas, comme canvas/seed.tsx).
     const canvasDir = path.posix.dirname(file);
     const components = this.components().filter((c): c is ComponentEntry & { file: string } => c.file !== null && !(canvasDir !== '.' && c.file.startsWith(`${canvasDir}/`)));
-    const result = generateExamples(this.root, components, (target) => this.moduleSpecifier(file, target));
+    // Même jour de référence que la génération précédente : un fichier qui ne change pas ne fait pas
+    // refaire les captures des écrans.
+    let anchor: Date | undefined;
+    try {
+      const found = ANCHOR.exec(fs.readFileSync(this.resolve(file), 'utf8'));
+      if (found) anchor = new Date(Number(found[1]), Number(found[2]) - 1, Number(found[3]));
+    } catch {
+      // Pas encore généré.
+    }
+    const result = generateExamples(this.root, components, (target) => this.moduleSpecifier(file, target), anchor);
     if (!result) return null;
     return { file, components: result.components, changed: writeIfChanged(this.resolve(file), result.code) };
   }
